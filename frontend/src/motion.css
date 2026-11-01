@@ -1,0 +1,142 @@
+/* Independently implemented interaction patterns inspired by Magic Card,
+   React Bits and Vue Bits. No runtime animation dependency. */
+:root {
+  --motion-rgb: 25, 116, 112;
+  --motion-duration: 220ms;
+}
+.motion-card {
+  position: relative;
+  isolation: isolate;
+  transition:
+    transform var(--motion-duration) ease,
+    box-shadow var(--motion-duration) ease,
+    border-color var(--motion-duration) ease;
+}
+.motion-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    320px circle at var(--pointer-x, 50%) var(--pointer-y, 50%),
+    rgba(var(--motion-rgb), 0.13),
+    transparent 72%
+  );
+  transition: opacity var(--motion-duration) ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .motion-card:hover {
+    transform: translateY(-4px);
+    border-color: rgba(var(--motion-rgb), 0.35) !important;
+    box-shadow:
+      0 16px 30px -18px rgba(var(--motion-rgb), 0.4),
+      0 3px 8px rgba(var(--motion-rgb), 0.06);
+  }
+  .motion-card[data-tilt]:hover {
+    transform: perspective(900px) translateY(-4px) rotateX(var(--tilt-x, 0deg))
+      rotateY(var(--tilt-y, 0deg));
+  }
+  .motion-card[data-spotlight-active]::before {
+    opacity: 1;
+  }
+  .motion-button:hover:not(:disabled),
+  .system-layout .ed-button--primary:hover:not(.is-disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 7px 16px -9px rgba(var(--motion-rgb), 0.65);
+  }
+}
+.motion-card:focus-within {
+  border-color: rgba(var(--motion-rgb), 0.4);
+  box-shadow: 0 0 0 3px rgba(var(--motion-rgb), 0.08);
+}
+.motion-card:focus-within::before {
+  opacity: 0.6;
+}
+.motion-button,
+.system-layout .ed-button--primary {
+  position: relative;
+  overflow: hidden;
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease;
+}
+.motion-button::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    110deg,
+    transparent 25%,
+    #ffffff25 50%,
+    transparent 75%
+  );
+  transform: translateX(-130%);
+  transition: transform 600ms ease;
+}
+.motion-button:hover:not(:disabled)::after {
+  transform: translateX(130%);
+}
+.motion-button:active:not(:disabled),
+.system-layout .ed-button--primary:active:not(.is-disabled) {
+  transform: scale(0.98);
+}
+.motion-enter {
+  animation: workbench-enter 480ms backwards;
+}
+.setup-grid > :nth-child(2) {
+  animation-delay: 70ms;
+}
+.setup-grid > :nth-child(3) {
+  animation-delay: 140ms;
+}
+@keyframes workbench-enter {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.motion-hero {
+  position: relative;
+}
+.motion-hero::before {
+  content: "";
+  position: absolute;
+  right: 30px;
+  top: 24px;
+  width: 144px;
+  height: 96px;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image: radial-gradient(
+    rgba(var(--motion-rgb), 0.19) 1px,
+    transparent 1px
+  );
+  background-size: 12px 12px;
+  mask-image: linear-gradient(to left, #000, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .motion-card,
+  .motion-button,
+  .motion-enter,
+  .system-layout .ed-button--primary {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
+  .motion-card::before,
+  .motion-button::after {
+    display: none !important;
+  }
+}
+
+.dark {
+  --motion-rgb: 100, 208, 192;
+}

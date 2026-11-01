@@ -1,0 +1,344 @@
+{
+  "customers": [
+    {
+      "id": "CUST-001",
+      "name": "林晓",
+      "email": "customer001@example.test",
+      "loyalty_tier": "gold",
+      "orders": [
+        {
+          "id": "ORD-1001",
+          "product_name": "无线降噪耳机",
+          "category": "electronics",
+          "amount": 129.99,
+          "status": "delivered",
+          "order_days_ago": 9,
+          "delivered_days_ago": 6,
+          "is_final_sale": false,
+          "refunded": false
+        }
+      ]
+    },
+    {
+      "id": "CUST-002",
+      "name": "周宁",
+      "email": "customer002@example.test",
+      "loyalty_tier": "standard",
+      "orders": [
+        {
+          "id": "ORD-1002",
+          "product_name": "清仓印花短袖",
+          "category": "apparel",
+          "amount": 19.99,
+          "status": "delivered",
+          "order_days_ago": 7,
+          "delivered_days_ago": 4,
+          "is_final_sale": true,
+          "refunded": false
+        }
+      ]
+    },
+    {
+      "id": "CUST-003",
+      "name": "陈晨",
+      "email": "customer003@example.test",
+      "loyalty_tier": "platinum",
+      "orders": [
+        {
+          "id": "ORD-1003",
+          "product_name": "55英寸高清电视",
+          "category": "electronics",
+          "amount": 1299.0,
+          "status": "delivered",
+          "order_days_ago": 11,
+          "delivered_days_ago": 8,
+          "is_final_sale": false,
+          "refunded": false
+        }
+      ]
+    },
+    {
+      "id": "CUST-004",
+      "name": "李明",
+      "email": "customer004@example.test",
+      "loyalty_tier": "standard",
+      "orders": [
+        {
+          "id": "ORD-1004",
+          "product_name": "便携蓝牙音箱",
+          "category": "electronics",
+          "amount": 79.99,
+          "status": "delivered",
+          "order_days_ago": 14,
+          "delivered_days_ago": 10,
+          "is_final_sale": false,
+          "refunded": true
+        }
+      ]
+    },
+    {
+      "id": "CUST-005",
+      "name": "许悦",
+      "email": "customer005@example.test",
+      "loyalty_tier": "gold",
+      "orders": [
+        {
+          "id": "ORD-1005",
+          "product_name": "轻量越野跑鞋",
+          "category": "footwear",
+          "amount": 89.99,
+          "status": "delivered",
+          "order_days_ago": 50,
+          "delivered_days_ago": 45,
+          "is_final_sale": false,
+          "refunded": false
+        }
+      ]
+    },
+    {
+      "id": "CUST-006",
+      "name": "王凯",
+      "email": "customer006@example.test",
+      "loyalty_tier": "standard",
+      "orders": [
+        {
+          "id": "ORD-1006",
+          "product_name": "家用滴滤咖啡机",
+          "category": "home",
+          "amount": 59.99,
+          "status": "shipped",
+          "order_days_ago": 3,
+          "delivered_days_ago": null,
+          "is_final_sale": false,
+          "refunded": false
+        }
+      ]
+    },
+    {
+      "id": "CUST-007",
+      "name": "赵晴",
+      "email": "customer007@example.test",
+      "loyalty_tier": "platinum",
+      "orders": [
+        {
+          "id": "ORD-1007",
+          "product_name": "真皮通勤手提包",
+          "category": "accessories",
+          "amount": 650.0,
+          "status": "delivered",
+          "order_days_ago": 10,
+          "delivered_days_ago": 7,
+          "is_final_sale": false,
+          "refunded": false
+        },
+        {
+          "id": "ORD-1008",
+          "product_name": "硅胶手机壳",
+          "category": "accessories",
+          "amount": 24.99,
+          "status": "delivered",
+          "order_days_ago": 15,
+          "delivered_days_ago": 12,
+          "is_final_sale": false,
+          "refunded": false
+        }
+      ]
+    },
+    {
+      "id": "CUST-008",
+      "name": "孙浩",
+      "email": "customer008@example.test",
+      "loyalty_tier": "standard",
+      "orders": [
+        {
+          "id": "ORD-1009",
+          "product_name": "清仓保暖外套",
+          "category": "apparel",
+          "amount": 199.99,
+          "status": "delivered",
+          "order_days_ago": 5,
+          "delivered_days_ago": 2,
+          "is_final_sale": true,
+          "refunded": false
+        }
+      ]
+    },
+    {
+      "id": "CUST-009",
+      "name": "吴桐",
+      "email": "customer009@example.test",
+      "loyalty_tier": "gold",
+      "orders": [
+        {
+          "id": "ORD-1010",
+          "product_name": "铝合金笔记本支架",
+          "category": "electronics",
+          "amount": 39.99,
+          "status": "delivered",
+          "order_days_ago": 24,
+          "delivered_days_ago": 20,
+          "is_final_sale": false,
+          "refunded": false
+        }
+      ]
+    },
+    {
+      "id": "CUST-010",
+      "name": "郑宇",
+      "email": "customer010@example.test",
+      "loyalty_tier": "standard",
+      "orders": [
+        {
+          "id": "ORD-1011",
+          "product_name": "家用游戏主机",
+          "category": "electronics",
+          "amount": 499.99,
+          "status": "delivered",
+          "order_days_ago": 8,
+          "delivered_days_ago": 5,
+          "is_final_sale": false,
+          "refunded": false
+        },
+        {
+          "id": "ORD-1012",
+          "product_name": "无线游戏手柄",
+          "category": "electronics",
+          "amount": 69.99,
+          "status": "delivered",
+          "order_days_ago": 8,
+          "delivered_days_ago": 5,
+          "is_final_sale": false,
+          "refunded": false
+        }
+      ]
+    },
+    {
+      "id": "CUST-011",
+      "name": "冯雪",
+      "email": "customer011@example.test",
+      "loyalty_tier": "platinum",
+      "orders": [
+        {
+          "id": "ORD-1013",
+          "product_name": "简约钻石耳钉",
+          "category": "jewelry",
+          "amount": 899.0,
+          "status": "delivered",
+          "order_days_ago": 12,
+          "delivered_days_ago": 9,
+          "is_final_sale": false,
+          "refunded": false
+        }
+      ]
+    },
+    {
+      "id": "CUST-012",
+      "name": "沈言",
+      "email": "customer012@example.test",
+      "loyalty_tier": "standard",
+      "orders": [
+        {
+          "id": "ORD-1014",
+          "product_name": "防滑瑜伽垫",
+          "category": "fitness",
+          "amount": 29.99,
+          "status": "delivered",
+          "order_days_ago": 65,
+          "delivered_days_ago": 60,
+          "is_final_sale": false,
+          "refunded": false
+        }
+      ]
+    },
+    {
+      "id": "CUST-013",
+      "name": "顾念",
+      "email": "customer013@example.test",
+      "loyalty_tier": "gold",
+      "orders": [
+        {
+          "id": "ORD-1015",
+          "product_name": "智能运动手表",
+          "category": "electronics",
+          "amount": 249.99,
+          "status": "delivered",
+          "order_days_ago": 4,
+          "delivered_days_ago": 1,
+          "is_final_sale": false,
+          "refunded": false
+        },
+        {
+          "id": "ORD-1016",
+          "product_name": "清仓手表表带",
+          "category": "accessories",
+          "amount": 19.99,
+          "status": "delivered",
+          "order_days_ago": 4,
+          "delivered_days_ago": 1,
+          "is_final_sale": true,
+          "refunded": false
+        }
+      ]
+    },
+    {
+      "id": "CUST-014",
+      "name": "何川",
+      "email": "customer014@example.test",
+      "loyalty_tier": "standard",
+      "orders": [
+        {
+          "id": "ORD-1017",
+          "product_name": "人体工学办公椅",
+          "category": "furniture",
+          "amount": 219.0,
+          "status": "delivered",
+          "order_days_ago": 18,
+          "delivered_days_ago": 15,
+          "is_final_sale": false,
+          "refunded": false
+        },
+        {
+          "id": "ORD-1018",
+          "product_name": "电动升降书桌",
+          "category": "furniture",
+          "amount": 540.0,
+          "status": "delivered",
+          "order_days_ago": 18,
+          "delivered_days_ago": 15,
+          "is_final_sale": false,
+          "refunded": false
+        }
+      ]
+    },
+    {
+      "id": "CUST-015",
+      "name": "唐可",
+      "email": "customer015@example.test",
+      "loyalty_tier": "platinum",
+      "orders": [
+        {
+          "id": "ORD-1019",
+          "product_name": "家用意式咖啡机",
+          "category": "home",
+          "amount": 320.0,
+          "status": "delivered",
+          "order_days_ago": 28,
+          "delivered_days_ago": 25,
+          "is_final_sale": false,
+          "refunded": false
+        },
+        {
+          "id": "ORD-1020",
+          "product_name": "手持电动打奶器",
+          "category": "home",
+          "amount": 45.0,
+          "status": "delivered",
+          "order_days_ago": 28,
+          "delivered_days_ago": 25,
+          "is_final_sale": false,
+          "refunded": true
+        }
+      ]
+    }
+  ]
+}

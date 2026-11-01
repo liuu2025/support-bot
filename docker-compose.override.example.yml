@@ -1,0 +1,25 @@
+# Optional local port override. Use with:
+# docker compose --env-file private/support-bot.env \
+#   -f docker-compose.yml -f docker-compose.override.example.yml up -d --build
+#
+# All host ports bind to loopback. Do not expose this development stack publicly.
+services:
+  postgres:
+    restart: unless-stopped
+
+  redis:
+    restart: unless-stopped
+
+  frontend:
+    restart: unless-stopped
+
+  backend:
+    restart: unless-stopped
+
+# Optional when the host Docker address pool is exhausted. Create this network
+# before starting the stack:
+# docker network create support-bot_net --subnet 10.98.0.0/24
+networks:
+  default:
+    external: true
+    name: support-bot_net
