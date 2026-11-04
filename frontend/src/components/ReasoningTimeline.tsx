@@ -33,6 +33,7 @@ const STEP_META: Record<
   budget_exhausted: { label: "额度用尽", icon: Gauge, tone: "warn" },
   output_correction: { label: "输出已纠正", icon: ShieldAlert, tone: "bad" },
   notice: { label: "提示", icon: Info, tone: "info" },
+  turn_summary: { label: "本轮统计", icon: Gauge, tone: "neutral" },
   trace: { label: "调用链", icon: ExternalLink, tone: "brand" },
 };
 
@@ -87,7 +88,7 @@ function StepBody({ step }: { step: StepEvent }) {
     case "tool_call":
       return (
         <div className="text-xs leading-6 text-muted">
-          <strong>{({ get_order: "查询订单详情", list_orders: "查询当前客户的订单", get_my_profile: "读取当前客户资料", check_refund_eligibility: "核验退款条件", prepare_refund: "准备待确认方案" } as Record<string, string>)[p.tool] || p.tool}</strong>
+          <strong>{({ get_order: "查询订单详情", list_orders: "查询当前客户的订单", offer_order_choices: "展示可选订单", get_my_profile: "读取当前客户资料", check_refund_eligibility: "核验退款条件", prepare_refund: "准备待确认方案" } as Record<string, string>)[p.tool] || p.tool}</strong>
           {p.args?.order_id && <p className="break-all font-mono text-[11px]">{p.args.order_id}</p>}
           <details className="mt-1 text-subtle"><summary className="cursor-pointer">工具参数</summary><code className="break-all">{p.tool}({argsSummary(p.args)})</code></details>
         </div>
@@ -151,6 +152,8 @@ function StepBody({ step }: { step: StepEvent }) {
           {p.model ? ` · ${p.model}` : ""}
         </p>
       );
+    case "turn_summary":
+      return <p className="text-xs leading-6 text-muted">本轮：工具 {p.tool_calls ?? 0} 次 · Token {((p.input_tokens ?? 0) + (p.output_tokens ?? 0)).toLocaleString()} · 耗时 {Number(p.elapsed_seconds ?? 0).toFixed(1)}s</p>;
     case "notice":
       return <p className="text-xs text-info">{p.message}</p>;
     case "output_correction":

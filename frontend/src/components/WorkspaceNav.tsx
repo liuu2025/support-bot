@@ -12,7 +12,7 @@ export function WorkspaceTopbar() {
   const [theme, toggleTheme] = useTheme();
   return <header className="workspace-topbar">
     <NavLink to="/chat" className="flex items-center gap-3 text-fg">
-      <Logo size={34} /><span><strong className="block text-base">知序客服</strong><small className="text-[10px] text-subtle">退款 Agent 工作台</small></span>
+      <Logo size={34} /><span><strong className="block text-base">退款客服</strong><small className="text-[10px] text-subtle">退款 Agent 工作台</small></span>
     </NavLink>
     <nav aria-label="主导航" className="workspace-header-nav">
       <NavLink to="/chat"><MessageSquare size={15} />退款工作台</NavLink>

@@ -23,6 +23,7 @@ export default function AgentPanel({
   streaming,
   startedAt,
   endedAt,
+  turnMessageId,
   proposals = [],
   showTitle = true,
 }: {
@@ -30,6 +31,7 @@ export default function AgentPanel({
   streaming: boolean;
   startedAt: number | null;
   endedAt: number | null;
+  turnMessageId: number | null;
   proposals?: RefundProposal[];
   showTitle?: boolean;
 }) {
@@ -58,13 +60,32 @@ export default function AgentPanel({
     container?.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
   }, [steps.length]);
 
-  const tokens = steps
-    .filter((s) => s.step_type === "usage")
+  const currentTurnStart = startedAt;
+  // Customer-confirmation events have their own response message id; they are
+  // not new agent turns and must not replace the last agent-turn counters.
+  const scopedTurnId = turnMessageId ?? (!currentTurnStart ? [...steps].reverse().find(s => s.step_type !== "confirmation" && s.message_id != null)?.message_id ?? null : null);
+  const currentTurnSteps = scopedTurnId == null ? [] : steps.filter(s => s.message_id === scopedTurnId);
+  const currentSummary = [...currentTurnSteps].reverse().find(s => s.step_type === "turn_summary");
+  const summaryIsCurrent = Boolean(currentSummary);
+  const hasUnfinishedTurn = Boolean(streaming && currentTurnStart && !summaryIsCurrent);
+  const turnSteps = hasUnfinishedTurn || summaryIsCurrent ? currentTurnSteps : [];
+  const activeTokens = turnSteps.filter(s => s.step_type === "usage")
     .reduce((n, s) => n + (s.payload.input_tokens ?? 0) + (s.payload.output_tokens ?? 0), 0);
-  const tools = steps.filter((s) => s.step_type === "tool_call").length;
-  const elapsed = startedAt ? ((streaming ? now : endedAt ?? now) - startedAt) / 1000 : 0;
+  const tokens = hasUnfinishedTurn
+    ? activeTokens
+    : currentSummary && summaryIsCurrent
+      ? (currentSummary.payload.input_tokens ?? 0) + (currentSummary.payload.output_tokens ?? 0)
+      : activeTokens;
+  const tools = currentSummary && summaryIsCurrent
+    ? currentSummary.payload.tool_calls ?? 0
+    : turnSteps.filter(s => s.step_type === "tool_call").length;
+  const elapsed = hasUnfinishedTurn && currentTurnStart
+    ? (now - currentTurnStart) / 1000
+    : currentSummary && summaryIsCurrent
+      ? currentSummary.payload.elapsed_seconds ?? 0
+      : !currentTurnStart && startedAt ? ((streaming ? now : endedAt ?? now) - startedAt) / 1000 : 0;
   const outcome = outcomeOf(steps, proposals);
-  const visibleSteps = showAllEvents ? steps : steps.filter(s => !DETAIL_EVENTS.has(s.step_type));
+  const visibleSteps = showAllEvents ? steps : steps.filter(s => !DETAIL_EVENTS.has(s.step_type) && s.step_type !== "turn_summary");
 
   return (
     <div className="flex h-full flex-col">
@@ -96,10 +117,10 @@ export default function AgentPanel({
             ? "已包含模型输出、Token 用量与调用链，按原始编号展示。"
             : "仅展示工具与业务结果；隐藏其他事件时，原始编号会跳号。"}</p>
         </div>
-        <details className="text-xs text-subtle"><summary className="cursor-pointer">运行统计</summary><div className="mt-3 grid grid-cols-3 gap-2">
-          <Stat label="工具调用" value={tools} />
-          <Stat label="Token" value={tokens.toLocaleString()} />
-          <Stat label="耗时" value={`${elapsed.toFixed(1)}s`} />
+        <details className="text-xs text-subtle"><summary className="cursor-pointer">最近一轮统计</summary><p className="mt-2 leading-5">仅统计最近一轮的工具调用与 Token；耗时为该轮总耗时。旧记录缺少服务端回合汇总，刷新后无法还原耗时，可能显示 0。</p><div className="mt-3 grid grid-cols-3 gap-2">
+          <Stat label="本轮工具" value={tools} />
+          <Stat label="本轮 Token" value={tokens.toLocaleString()} />
+          <Stat label="本轮耗时" value={`${elapsed.toFixed(1)}s`} />
         </div></details>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">

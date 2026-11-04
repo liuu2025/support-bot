@@ -1,12 +1,19 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ChatRequest(BaseModel):
     message: str
     conversation_id: str | None = None
+    order_id: str | None = None
+    abandon_card_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+class OrderChoiceDecision(BaseModel):
+    model_config = {"extra": "forbid"}
+    action: Literal["selected", "skipped"]
     order_id: str | None = None
 
 
@@ -19,6 +26,7 @@ class MessageOut(BaseModel):
 
 class ReasoningEventOut(BaseModel):
     id: int
+    message_id: int | None = None
     seq: int
     step_type: str
     node: str

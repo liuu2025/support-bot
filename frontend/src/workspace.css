@@ -374,6 +374,47 @@
   color:rgb(var(--c-subtle));
 }
 
+.order-choice-card {
+  flex-shrink:0;
+  margin-left:36px;
+  padding:16px;
+  border:1px solid rgb(var(--c-brand) / .28);
+  border-radius:13px;
+  background:rgb(var(--c-brand) / .035);
+}
+
+.order-choice-list {
+  display:grid;
+  gap:8px;
+  margin:14px 0 12px;
+}
+
+.order-choice {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  width:100%;
+  padding:10px 12px;
+  border:1px solid rgb(var(--c-line));
+  border-radius:10px;
+  background:rgb(var(--c-surface));
+  text-align:left;
+  transition:background .15s,border-color .15s;
+}
+
+.order-choice:hover:not(:disabled) {
+  border-color:rgb(var(--c-brand));
+  background:rgb(var(--c-brand) / .06);
+}
+
+.order-choice small {
+  display:block;
+  margin-top:3px;
+  color:rgb(var(--c-subtle));
+  font-size:10px;
+}
+
 .refund-confirmation {
   border:1px solid rgb(var(--c-line));
   border-radius:13px;
@@ -415,4 +456,112 @@
   border-radius:12px;
   padding:18px;
   margin-left:36px;
+}
+
+/* Order placement can switch between the compact top strip and a desktop rail. */
+.refund-workspace.orders-left {
+  grid-template-columns:260px minmax(500px,1fr) 340px;
+}
+.orders-left > .refund-conversation > .order-top-mobile { display:none; }
+.orders-left .order-rail {
+  min-width:0;
+  overflow:auto;
+  border-inline:1px solid rgb(var(--c-line));
+  background:rgb(var(--c-bg));
+}
+.orders-left .rail-intro {
+  display:block;
+  padding:18px 14px 12px;
+}
+.orders-left .rail-intro h1 {
+  font-size:19px;
+  line-height:1.45;
+  letter-spacing:0;
+}
+.orders-left .rail-intro p {
+  font-size:11px;
+  line-height:1.65;
+}
+.orders-left .rail-intro .intro-actions {
+  display:grid;
+  grid-template-columns:minmax(0,1fr);
+  margin-top:12px;
+}
+.orders-left .rail-intro .intro-actions > button {
+  justify-content:flex-start;
+}
+.orders-left .order-rail .refund-chat-status {
+  flex-wrap:wrap;
+  gap:6px;
+  padding:10px 14px;
+  font-size:9px;
+}
+.orders-left .order-rail .refund-chat-status .ml-auto {
+  width:100%;
+  margin-left:14px;
+}
+.order-panel { min-width:0; }
+.order-panel-title {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:12px 18px 8px;
+  color:rgb(var(--c-brand));
+  font-size:12px;
+}
+.orders-left .refund-scenarios {
+  grid-template-columns:minmax(0,1fr);
+  padding:8px 12px 12px;
+  gap:8px;
+}
+.orders-left .selected-order-info {
+  margin:0 14px 12px;
+}
+.orders-left .policy-summary {
+  align-items:flex-start;
+  padding:12px 14px;
+}
+.intro-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.order-choice-card.is-resolved { opacity:.82; }
+.order-choice-card.is-resolved .order-choice-list,
+.order-choice-card.is-resolved > .order-choice-list { display:none; }
+.card-abandon-dialog-backdrop {
+  position:fixed;
+  z-index:100;
+  inset:0;
+  display:grid;
+  place-items:center;
+  padding:20px;
+  background:rgb(15 23 42 / .38);
+}
+.card-abandon-dialog {
+  width:min(440px,100%);
+  border:1px solid rgb(var(--c-line));
+  border-radius:16px;
+  padding:22px;
+  background:rgb(var(--c-surface));
+  box-shadow:0 22px 70px rgb(15 23 42 / .2);
+}
+.card-abandon-dialog h2 { font-size:16px; font-weight:650; }
+.card-abandon-dialog p { margin-top:8px; color:rgb(var(--c-muted)); font-size:12px; line-height:1.8; }
+.card-abandon-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:20px; }
+@media (max-width: 1180px) {
+  .refund-workspace.orders-left { grid-template-columns:220px minmax(0,1fr) 300px; }
+}
+@media (max-width: 980px) {
+  .refund-workspace, .refund-workspace.orders-left {
+    grid-template-columns:minmax(0,1fr);
+    grid-template-rows:minmax(0,1fr) minmax(220px,30vh);
+  }
+  .orders-left .order-rail { display:none; }
+  .orders-left > .refund-conversation > .order-top-mobile { display:block; }
+  .refund-workspace:not(.orders-left) .order-rail { display:none; }
+  .orders-left .order-top-mobile .refund-scenarios { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .orders-left .order-top-mobile .policy-summary { display:none; }
+  .refund-intro { padding:16px 18px 12px; }
+  .refund-intro h1 { font-size:21px; }
+  .refund-intro p { display:none; }
+  .refund-scenarios { padding:0 16px 10px; gap:7px; }
+  .scenario-order { padding:10px; }
+  .refund-messages { padding:16px; }
 }

@@ -9,7 +9,7 @@
 # OpenAI-compatible base URL, the API key, and pick a model from the fetched
 # list. Nothing here needs a key, and no restart is required after saving.
 #
-# Host ports bind to loopback: 7100 (UI) / 7101 (API).
+# Host ports: 7100 (UI, LAN-reachable in the tracked local override) / 7101 (loopback API).
 # Load test: see loadtest/README.md.
 x-backend-env: &backend-env
   ENV: ${ENV:-dev}

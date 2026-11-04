@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 class ToolContext:
     conversation_id: str
     verified_customer_id: str | None = None
+    user_message_id: int | None = None
 
 
 UNTRUSTED_PLACEHOLDER = "[text removed: looked like instructions]"
@@ -145,6 +146,38 @@ def _build_tools() -> list:
         return json.dumps({"orders": [_order_view(o) for o in orders]})
 
     @tool
+    async def offer_order_choices(config: RunnableConfig) -> str:
+        """Offer a clickable list of the authenticated customer's orders when the intended order is ambiguous.
+
+        This is a read-only disambiguation step. It neither selects an order nor
+        checks refund eligibility, prepares a proposal, nor authorizes an action.
+        The customer can click an order or continue describing it in chat.
+        """
+        ctx = _ctx(config)
+        guard = _require_identity(ctx)
+        if guard:
+            return guard
+        async with db.SessionLocal() as session:
+            orders = (
+                await session.scalars(
+                    select(Order)
+                    .where(Order.customer_id == ctx.verified_customer_id)
+                    .order_by(Order.order_date.desc(), Order.id)
+                    .limit(50)
+                )
+            ).all()
+            customer = await session.get(Customer, ctx.verified_customer_id)
+            if customer is None:
+                return json.dumps({"error": "identity_not_verified"})
+            choices = []
+            for index, order in enumerate(orders):
+                item = _order_view(order)
+                item["choice_label"] = chr(ord("A") + index) if index < 26 else str(index + 1)
+                item["eligibility"] = evaluate(order, customer).to_dict()
+                choices.append(item)
+        return json.dumps({"orders": choices}, ensure_ascii=False)
+
+    @tool
     async def get_order(order_id: str, config: RunnableConfig) -> str:
         """Get the details of a single order belonging to the signed-in customer."""
         ctx = _ctx(config)
@@ -192,14 +225,14 @@ def _build_tools() -> list:
         from app.refund_confirmation import ProposalError, prepare
 
         try:
-            result = await prepare(ctx.verified_customer_id, ctx.conversation_id, order_id)
+            result = await prepare(ctx.verified_customer_id, ctx.conversation_id, order_id, ctx.user_message_id)
         except ProposalError:
             return json.dumps({"error": "conversation_not_found"})
         if result.get("proposal"):
             result["proposal"]["product_name"] = untrusted_text(result["proposal"]["product_name"])
         return json.dumps(result, ensure_ascii=False)
 
-    return [get_my_profile, list_orders, get_order, check_refund_eligibility, prepare_refund]
+    return [get_my_profile, list_orders, offer_order_choices, get_order, check_refund_eligibility, prepare_refund]
 
 
 TOOLS: list = _build_tools()

@@ -66,6 +66,7 @@ def view(proposal: RefundProposal) -> dict:
     return {
         "id": proposal.id,
         "conversation_id": proposal.conversation_id,
+        "source_message_id": proposal.source_message_id,
         "order_id": proposal.order_id,
         "product_name": proposal.product_name,
         "amount": float(proposal.amount),
@@ -91,22 +92,263 @@ async def lock_conversation(session, cid: str, customer_id: str) -> Conversation
     return await session.get(Conversation, cid)
 
 
-async def invalidate_pending(customer_id: str, cid: str) -> None:
+async def invalidate_pending(customer_id: str, cid: str, source_message_id: int | None = None) -> None:
+    """End only cards created by a failed turn; unrelated cards survive."""
+    events: list[dict] = []
     async with db.SessionLocal() as session:
         await lock_conversation(session, cid, customer_id)
-        await session.execute(
-            update(RefundProposal)
-            .where(
-                RefundProposal.customer_id == customer_id,
-                RefundProposal.conversation_id == cid,
-                RefundProposal.status == "pending",
-            )
-            .values(status="superseded", resolved_at=utcnow())
-        )
+        filters = [
+            RefundProposal.customer_id == customer_id,
+            RefundProposal.conversation_id == cid,
+            RefundProposal.status == "pending",
+        ]
+        if source_message_id is not None:
+            filters.append(RefundProposal.source_message_id == source_message_id)
+        proposals = (await session.scalars(select(RefundProposal).where(*filters))).all()
+        for proposal in proposals:
+            proposal.status = "superseded"
+            proposal.resolved_at = utcnow()
+            source_id = proposal.source_message_id or source_message_id
+            if source_id is not None:
+                events.append(await _record_card_state(
+                    session, cid, source_id, f"proposal:{proposal.id}",
+                    "refund_proposal", "superseded", action_message_id=source_message_id,
+                ))
+
+        if source_message_id is not None:
+            source = await _offer_choice_event(session, cid, source_message_id)
+            card_id = f"choice:{source_message_id}"
+            if source is not None:
+                state = await _latest_card_state(session, cid, card_id)
+                if state is None or state.payload.get("status") == "pending":
+                    events.append(await _record_card_state(
+                        session, cid, source_message_id, card_id, "order_choice", "abandoned",
+                        {"by_message_id": source_message_id}, action_message_id=source_message_id,
+                    ))
         await session.commit()
+    for event in events:
+        await broadcaster.publish(cid, event)
 
 
-async def prepare(customer_id: str, cid: str, order_id: str) -> dict:
+async def _record_card_state(
+    session, cid: str, source_message_id: int | None, card_id: str, card_type: str, status: str,
+    extra: dict | None = None, *, action_message_id: int | None = None,
+) -> dict:
+    seq = await session.scalar(
+        update(Conversation).where(Conversation.id == cid)
+        .values(event_seq=Conversation.event_seq + 1).returning(Conversation.event_seq)
+    )
+    event_message_id = action_message_id if action_message_id is not None else source_message_id
+    payload = {"card_id": card_id, "card_type": card_type, "status": status,
+               "source_message_id": source_message_id, **(extra or {})}
+    event = ReasoningEvent(
+        conversation_id=cid, message_id=event_message_id, seq=seq, step_type="card_state",
+        node="customer_action", payload=payload,
+    )
+    session.add(event)
+    await session.flush()
+    return {"kind": "step", "id": event.id, "message_id": event_message_id, "seq": seq,
+            "step_type": event.step_type, "node": event.node, "payload": event.payload,
+            "created_at": aware(event.created_at).isoformat()}
+
+
+async def _latest_card_state(session, cid: str, card_id: str):
+    states = (await session.scalars(select(ReasoningEvent).where(
+        ReasoningEvent.conversation_id == cid, ReasoningEvent.step_type == "card_state",
+    ).order_by(ReasoningEvent.seq.desc()))).all()
+    return next((event for event in states if event.payload.get("card_id") == card_id), None)
+
+
+async def abandon_cards(customer_id: str, cid: str, message_id: int, card_ids: list[str]) -> list[dict]:
+    """Persist abandonment only for cards the customer explicitly chose to leave."""
+    events: list[dict] = []
+    async with db.SessionLocal() as session:
+        await lock_conversation(session, cid, customer_id)
+        for card_id in dict.fromkeys(card_ids):
+            if card_id.startswith("proposal:"):
+                proposal_id = card_id.removeprefix("proposal:")
+                proposal = await session.get(RefundProposal, proposal_id)
+                if proposal is None or proposal.customer_id != customer_id or proposal.conversation_id != cid:
+                    continue
+                if proposal.status == "pending" and aware(proposal.expires_at) > utcnow():
+                    proposal.status = "superseded"
+                    proposal.resolved_at = utcnow()
+                    events.append(await _record_card_state(
+                        session, cid, proposal.source_message_id, card_id, "refund_proposal", "abandoned",
+                        {"by_message_id": message_id}, action_message_id=message_id,
+                    ))
+            elif card_id.startswith("choice:"):
+                source_id = card_id.removeprefix("choice:")
+                if not source_id.isdigit():
+                    continue
+                source_id_int = int(source_id)
+                source = await _offer_choice_event(session, cid, source_id_int)
+                if source is None:
+                    continue
+                state = await _latest_card_state(session, cid, card_id)
+                if state is not None and state.payload.get("status") != "pending":
+                    continue
+                events.append(await _record_card_state(
+                    session, cid, source_id_int, card_id, "order_choice", "abandoned",
+                    {"by_message_id": message_id}, action_message_id=message_id,
+                ))
+        await session.commit()
+    for event in events:
+        await broadcaster.publish(cid, event)
+    return events
+
+
+async def _offer_choice_event(session, cid: str, source_id: int):
+    candidates = (await session.scalars(select(ReasoningEvent).where(
+        ReasoningEvent.conversation_id == cid, ReasoningEvent.message_id == source_id,
+        ReasoningEvent.step_type == "tool_result",
+    ).order_by(ReasoningEvent.seq.desc()))).all()
+    return next((event for event in candidates if event.payload.get("tool") == "offer_order_choices"), None)
+
+
+async def record_choice_card_pending(customer_id: str, cid: str, source_id: int) -> dict | None:
+    card_id = f"choice:{source_id}"
+    async with db.SessionLocal() as session:
+        await lock_conversation(session, cid, customer_id)
+        if await _latest_card_state(session, cid, card_id) is not None:
+            return None
+        event = await _record_card_state(session, cid, source_id, card_id, "order_choice", "pending")
+        await session.commit()
+    await broadcaster.publish(cid, event)
+    return event
+
+
+async def record_proposal_card_pending(customer_id: str, cid: str, proposal_id: str, source_id: int | None) -> dict | None:
+    if source_id is None:
+        return None
+    card_id = f"proposal:{proposal_id}"
+    async with db.SessionLocal() as session:
+        await lock_conversation(session, cid, customer_id)
+        if await _latest_card_state(session, cid, card_id) is not None:
+            return None
+        proposal = await session.get(RefundProposal, proposal_id)
+        if proposal is None or proposal.customer_id != customer_id or proposal.conversation_id != cid:
+            return None
+        event = await _record_card_state(session, cid, source_id, card_id, "refund_proposal", "pending")
+        await session.commit()
+    await broadcaster.publish(cid, event)
+    return event
+
+
+async def resolve_order_choice_reply(customer_id: str, cid: str, text: str) -> tuple[str, str] | None:
+    """Resolve a bare contextual label against the newest pending choice card."""
+    import re
+
+    match = re.fullmatch(r"(?:选择|选|第)?\s*([a-z]|\d{1,2})(?:号|个)?", text.strip().casefold())
+    if not match:
+        return None
+    label = match.group(1)
+    async with db.SessionLocal() as session:
+        latest_user = await session.scalar(select(Message).where(
+            Message.conversation_id == cid, Message.role == "user",
+        ).order_by(Message.id.desc()).limit(1))
+        if latest_user is None:
+            return None
+        previous_user = await session.scalar(select(Message).where(
+            Message.conversation_id == cid, Message.role == "user", Message.id < latest_user.id,
+        ).order_by(Message.id.desc()).limit(1))
+        if previous_user is None:
+            return None
+        events = (await session.scalars(select(ReasoningEvent).where(
+            ReasoningEvent.conversation_id == cid,
+            ReasoningEvent.message_id == previous_user.id,
+            ReasoningEvent.step_type == "tool_result",
+        ).order_by(ReasoningEvent.seq.desc()))).all()
+        event = next((item for item in events if item.payload.get("tool") == "offer_order_choices"), None)
+        if event is None or event.message_id is None:
+            return None
+        card_id = f"choice:{event.message_id}"
+        state = await _latest_card_state(session, cid, card_id)
+        # Missing pending state is reconciled as pending for the narrow crash
+        # window between the offer event and its state event.
+        if state is not None and state.payload.get("status") != "pending":
+            return None
+        choices = (event.payload.get("result") or {}).get("orders", [])
+        matches = [
+            row for index, row in enumerate(choices)
+            if isinstance(row, dict)
+            and str(row.get("choice_label", chr(ord("A") + index) if index < 26 else index + 1)).casefold() == label
+        ]
+        if len(matches) != 1 or not isinstance(matches[0].get("order_id"), str):
+            return None
+        owned = await session.scalar(select(Order.id).where(
+            Order.id == matches[0]["order_id"], Order.customer_id == customer_id,
+        ))
+        if owned is None:
+            return None
+        return card_id, matches[0]["order_id"]
+    return None
+
+
+async def set_choice_card_state(
+    customer_id: str, cid: str, card_id: str, status: str, order_id: str | None = None,
+    *, action_message_id: int | None = None,
+) -> dict:
+    if status not in {"selected", "skipped"} or not card_id.startswith("choice:"):
+        raise ProposalError(422, "无效的订单选择卡操作。")
+    if status == "skipped" and order_id is not None:
+        raise ProposalError(422, "继续描述时不能附带订单号。")
+    try:
+        source_id = int(card_id.removeprefix("choice:"))
+    except ValueError:
+        raise ProposalError(404, "订单选择卡不存在。") from None
+    async with db.SessionLocal() as session:
+        await lock_conversation(session, cid, customer_id)
+        source = await _offer_choice_event(session, cid, source_id)
+        if source is None:
+            raise ProposalError(404, "订单选择卡不存在。")
+        previous = await _latest_card_state(session, cid, card_id)
+        if previous is None:
+            # Reconcile a crash between storing the offer event and its initial
+            # pending-state event while keeping the transition atomic.
+            await _record_card_state(session, cid, source_id, card_id, "order_choice", "pending")
+        elif previous.payload.get("status") != "pending":
+            raise ProposalError(409, "这张订单选择卡已处理或已关闭。")
+        if status == "selected":
+            allowed = {row.get("order_id") for row in (source.payload.get("result") or {}).get("orders", []) if isinstance(row, dict)}
+            if order_id not in allowed:
+                raise ProposalError(404, "所选订单不在这张卡片中。")
+            owned = await session.scalar(select(Order.id).where(
+                Order.id == order_id, Order.customer_id == customer_id,
+            ))
+            if owned is None:
+                raise ProposalError(404, "所选订单不在这张卡片中。")
+        action_message = None
+        if action_message_id is None:
+            source_message = await session.get(Message, source_id)
+            source_text = source_message.content if source_message is not None else ""
+            if status == "selected":
+                content = f"我选择订单 {order_id}。关于‘{source_text}’，请继续帮我处理。"
+            else:
+                content = f"继续描述，不选择订单。此前我问的是：‘{source_text}’。"
+            message = Message(conversation_id=cid, role="user", content=content)
+            session.add(message)
+            await session.flush()
+            action_message_id = message.id
+            action_message = {
+                "kind": "message", "role": "user", "content": content,
+                "message_id": message.id,
+            }
+        event = await _record_card_state(
+            session, cid, source_id, card_id, "order_choice", status,
+            {"by_message_id": action_message_id, **({"order_id": order_id} if order_id else {})},
+            action_message_id=action_message_id,
+        )
+        if action_message is not None:
+            event["action_message"] = action_message
+        await session.commit()
+    await broadcaster.publish(cid, event)
+    if event.get("action_message"):
+        await broadcaster.publish(cid, event["action_message"])
+    return event
+
+
+async def prepare(customer_id: str, cid: str, order_id: str, source_message_id: int | None = None) -> dict:
     async with db.SessionLocal() as session:
         await lock_conversation(session, cid, customer_id)
         order = await session.scalar(
@@ -140,9 +382,11 @@ async def prepare(customer_id: str, cid: str, order_id: str) -> dict:
             }
         current = await session.scalar(
             select(RefundProposal).where(
+                RefundProposal.customer_id == customer_id,
                 RefundProposal.conversation_id == cid,
+                RefundProposal.order_id == order_id,
                 RefundProposal.status == "pending",
-            )
+            ).order_by(RefundProposal.created_at.desc())
         )
         if (
             current
@@ -162,6 +406,7 @@ async def prepare(customer_id: str, cid: str, order_id: str) -> dict:
             id=f"rp-{uuid.uuid4().hex}",
             customer_id=customer_id,
             conversation_id=cid,
+            source_message_id=source_message_id,
             order_id=order.id,
             product_name=order.product_name,
             amount=order.amount,
@@ -210,7 +455,7 @@ async def owned_proposal(customer_id: str, pid: str) -> dict:
 
 async def _receipt(
     session, proposal: RefundProposal, content: str, result: dict
-) -> tuple[dict, dict]:
+) -> tuple[dict, dict, dict]:
     cid = proposal.conversation_id
     seq = await session.scalar(
         update(Conversation)
@@ -233,17 +478,25 @@ async def _receipt(
     )
     session.add_all([message, step])
     await session.flush()
+    step.message_id = message.id
+    state = await _record_card_state(
+        session, cid, proposal.source_message_id, f"proposal:{proposal.id}",
+        "refund_proposal", proposal.status,
+        {"by_message_id": message.id}, action_message_id=message.id,
+    )
     return (
         {"kind": "message", "role": "assistant", "content": content, "message_id": message.id},
         {
             "kind": "step",
             "id": step.id,
+            "message_id": message.id,
             "seq": seq,
             "step_type": step.step_type,
             "node": step.node,
             "payload": step.payload,
             "created_at": aware(step.created_at).isoformat(),
         },
+        state,
     )
 
 
@@ -333,15 +586,15 @@ async def act(customer_id: str, pid: str, action: str) -> dict:
             "amount": float(proposal.amount),
             "status": proposal.status,
         }
-        message, step = await _receipt(session, proposal, content, result_data)
+        message, step, card_state = await _receipt(session, proposal, content, result_data)
         await session.commit()
-        response = {"proposal": view(proposal), "message": message, "step": step, "replayed": False}
+        response = {"proposal": view(proposal), "message": message, "step": step, "card_state": card_state, "replayed": False}
     # Data is durable before notifications. Delivery failure cannot turn an
     # executed refund into a failed HTTP action that invites another payment.
     if proposal.status == "confirmed":
         REFUND_DECISIONS.labels(result_data["decision"]).inc()
     try:
-        for event in (message, step, {"kind": "refund_proposal", "proposal": response["proposal"]}):
+        for event in (message, step, response["card_state"], {"kind": "refund_proposal", "proposal": response["proposal"]}):
             await broadcaster.publish(proposal.conversation_id, event)
     except Exception:
         pass

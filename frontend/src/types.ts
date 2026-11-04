@@ -1,6 +1,8 @@
 export interface StepEvent {
   kind: "step";
   id: number;
+  /** Message associated with this event; agent-turn steps use the user turn, while confirmation receipts use their assistant receipt. */
+  message_id?: number | null;
   seq: number;
   step_type:
     | "model"
@@ -16,6 +18,8 @@ export interface StepEvent {
     | "output_correction"
     | "notice"
     | "trace"
+    | "turn_summary"
+    | "card_state"
     | "error";
   node: string;
   payload: Record<string, any>;
@@ -61,9 +65,19 @@ export type AgentEvent =
   | EscalationEvent
   | { kind: "refund_proposal"; proposal: RefundProposal };
 
+export interface CardStatusEvent {
+  card_id: string;
+  card_type: "order_choice" | "refund_proposal";
+  status: "pending" | "selected" | "skipped" | "abandoned" | "confirmed" | "cancelled" | "expired" | "superseded" | "invalidated";
+  order_id?: string;
+  source_message_id?: number | null;
+  by_message_id?: number;
+}
+
 export interface RefundProposal {
   id: string;
   conversation_id: string;
+  source_message_id?: number | null;
   order_id: string;
   product_name: string;
   amount: number;
@@ -80,6 +94,7 @@ export interface ProposalReceipt {
   replayed: boolean;
   message?: MessageEvent;
   step?: StepEvent;
+  card_state?: StepEvent;
 }
 
 export interface LocalWorkspaceSession {
@@ -137,6 +152,17 @@ export interface Order {
   is_final_sale: boolean;
   refunded: boolean;
   scenario: Scenario | null;
+}
+
+/** Safe display fields returned by the authenticated offer_order_choices tool. */
+export interface OrderChoice {
+  choice_label?: string;
+  order_id: string;
+  product_name: string;
+  amount: number;
+  status: string;
+  is_final_sale: boolean;
+  already_refunded: boolean;
 }
 
 export interface DemoSession {

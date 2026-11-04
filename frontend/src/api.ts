@@ -14,9 +14,11 @@ import type {
   ModelConfig,
   ModelPreset,
   ModelProbeResult,
+  MessageEvent,
   Order,
   RefundProposal,
   ProposalReceipt,
+  StepEvent,
   LocalWorkspaceSession,
 } from "./types";
 
@@ -130,10 +132,11 @@ export async function streamChat(
   onEvent: (event: AgentEvent) => void,
   signal?: AbortSignal,
   orderId?: string,
+  abandonCardIds: string[] = [],
 ): Promise<void> {
   const res = await request("customer", "/api/chat", {
     method: "POST",
-    body: JSON.stringify({ message, conversation_id: conversationId, order_id: orderId || null }),
+    body: JSON.stringify({ message, conversation_id: conversationId, order_id: orderId || null, abandon_card_ids: abandonCardIds }),
     signal,
   });
   await readSSE(res, onEvent);
@@ -241,6 +244,16 @@ export async function fetchMyConversation(id: string): Promise<ConversationDetai
 
 export async function fetchRefundProposals(cid: string): Promise<RefundProposal[]> {
   return (await request("customer", `/api/me/refund-proposals?conversation_id=${encodeURIComponent(cid)}`)).json();
+}
+
+export type OrderChoiceDecisionReceipt = StepEvent & { action_message?: MessageEvent };
+
+export async function decideOrderChoiceCard(
+  conversationId: string, cardId: string, action: "selected" | "skipped", orderId?: string,
+): Promise<OrderChoiceDecisionReceipt> {
+  return (await request("customer", `/api/me/order-choice-cards/${encodeURIComponent(cardId)}/decision?conversation_id=${encodeURIComponent(conversationId)}`, {
+    method: "POST", body: JSON.stringify({ action, order_id: orderId ?? null }),
+  })).json();
 }
 
 export async function decideRefundProposal(id: string, decision: "confirm" | "cancel"): Promise<ProposalReceipt> {

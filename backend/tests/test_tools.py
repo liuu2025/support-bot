@@ -41,6 +41,16 @@ async def test_profile_and_orders_come_from_token_identity(engine):
     assert [o["order_id"] for o in orders["orders"]] == ["ORD-1001"]
 
 
+async def test_offer_order_choices_only_lists_verified_customers_orders(engine):
+    choices = await _call(_ctx("CUST-001"), "offer_order_choices")
+    assert [row["order_id"] for row in choices["orders"]] == ["ORD-1001"]
+    assert "eligibility" in choices["orders"][0]
+    assert await approved_refunds("ORD-1001") == []
+
+    anonymous = await _call(_ctx(), "offer_order_choices")
+    assert anonymous["error"] == "identity_not_verified"
+
+
 async def test_there_is_no_tool_to_switch_identity(engine):
     names = set(tools_by_name(TOOLS))
     assert "lookup_customer" not in names

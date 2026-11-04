@@ -162,7 +162,8 @@ async def test_model_error_fails_the_turn_without_paying_out(monkeypatch, engine
 
     assert model.attempts >= 1
     assert any(e.get("kind") == "error" for e in events)
-    assert not any(e.get("kind") == "message" for e in events)
+    assert any(e.get("kind") == "message" and e.get("role") == "user" for e in events)
+    assert not any(e.get("kind") == "message" and e.get("role") == "assistant" for e in events)
     assert await approved("ORD-1001") == []
 
 

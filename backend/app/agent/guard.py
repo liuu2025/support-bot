@@ -75,6 +75,10 @@ _FUZZY_TARGETS: tuple[str, ...] = (
     "跳过审核",
 )
 _FUZZY_THRESHOLD = 88
+# `partial_ratio` is degenerate for one- and two-character inputs: any matching
+# character in a long target can score 100. Short replies such as a customer's
+# selection of "c" must remain ordinary chat data, not injection evidence.
+_FUZZY_MIN_CHARS = 8
 
 _NON_WORD = re.compile(r"[\W_]+")
 
@@ -103,6 +107,10 @@ def detect_injection(text: str) -> list[str]:
         found.append("base64_payload")
 
     loose, tight = _normalise(text)
+    # Keep exact regex/obfuscation checks above for every length, but don't run
+    # substring-based fuzzy matching unless there is enough signal to compare.
+    if len(tight) < _FUZZY_MIN_CHARS:
+        return found
     for target in _FUZZY_TARGETS:
         target_tight = target.replace(" ", "")
         score = max(

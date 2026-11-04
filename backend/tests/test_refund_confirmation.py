@@ -12,7 +12,7 @@ from app import refund_confirmation as confirmation
 from app.agent.runner import create_conversation, run_agent_turn
 from app.agent.tools import TOOLS, ToolContext, tool_config
 from app.db import session as db
-from app.db.models import Order, Refund, RefundProposal, utcnow
+from app.db.models import Conversation, Message, Order, ReasoningEvent, Refund, RefundProposal, utcnow
 from tests.conftest import admin_auth, auth, tools_by_name
 from tests.doubles import ScriptedChatModel, install, tool_call
 
@@ -44,6 +44,7 @@ async def test_agent_has_no_executing_or_identity_switching_tools(engine):
         "get_order",
         "check_refund_eligibility",
         "prepare_refund",
+        "offer_order_choices",
     }
     cid = await create_conversation("CUST-001")
     value = json.loads(
@@ -108,7 +109,7 @@ async def test_denial_keeps_the_explanation_and_negative_refund_status(client, e
         await session.commit()
     events = [event async for event in run_agent_turn("CUST-001", None, "申请退款")]
     assert not any(event.get("step_type") == "output_correction" for event in events)
-    assert next(event["content"] for event in events if event["kind"] == "message") == reply
+    assert next(event["content"] for event in events if event["kind"] == "message" and event.get("role") == "assistant") == reply
     assert await ledger_count() == 0
     async with db.SessionLocal() as session:
         assert await session.scalar(select(func.count(RefundProposal.id))) == 0
@@ -143,7 +144,7 @@ async def test_prepared_card_uses_a_clear_prompt_instead_of_model_debug_details(
         ),
     )
     events = [event async for event in run_agent_turn(customer, None, "申请退款")]
-    content = next(event["content"] for event in events if event["kind"] == "message")
+    content = next(event["content"] for event in events if event["kind"] == "message" and event.get("role") == "assistant")
     assert expected in content and "尚未" in content
     assert not any(value in content for value in ("rp-internal", "pending", "UTC"))
     assert any(event["kind"] == "refund_proposal" for event in events)
@@ -304,6 +305,53 @@ async def test_prepare_rejects_ineligible_orders_without_a_confirmation_card(eng
     result = await confirmation.prepare("CUST-002", cid, "ORD-1002")
     assert result["decision"] == "denied" and "proposal" not in result
     assert await ledger_count() == 0
+
+
+async def test_order_choice_selection_is_scoped_and_persisted(engine):
+    cid = await create_conversation("CUST-001")
+    async with db.SessionLocal() as session:
+        user = Message(conversation_id=cid, role="user", content="哪一笔订单")
+        session.add(user)
+        await session.flush()
+        conversation = await session.get(Conversation, cid)
+        conversation.event_seq = 1
+        session.add(ReasoningEvent(
+            conversation_id=cid, message_id=user.id, seq=1, step_type="tool_result", node="tools",
+            payload={"tool": "offer_order_choices", "result": {"orders": [
+                {"order_id": "ORD-1001", "choice_label": "A"},
+                {"order_id": "ORD-1003", "choice_label": "B"},
+            ]}},
+        ))
+        await session.flush()
+        session.add(Message(conversation_id=cid, role="user", content="选择a"))
+        await session.commit()
+    pending = await confirmation.record_choice_card_pending("CUST-001", cid, user.id)
+    assert pending["payload"]["status"] == "pending"
+    assert await confirmation.resolve_order_choice_reply("CUST-001", cid, "选择a") == (f"choice:{user.id}", "ORD-1001")
+    selected = await confirmation.set_choice_card_state("CUST-001", cid, f"choice:{user.id}", "selected", "ORD-1001")
+    assert selected["payload"]["status"] == "selected"
+    assert selected["message_id"] != user.id
+    assert selected["payload"]["source_message_id"] == user.id
+    assert selected["payload"]["by_message_id"] == selected["message_id"]
+    with pytest.raises(confirmation.ProposalError):
+        await confirmation.set_choice_card_state("CUST-001", cid, f"choice:{user.id}", "selected", "ORD-1003")
+
+
+async def test_failed_turn_does_not_invalidate_another_conversation_proposal(engine):
+    first_cid = await create_conversation("CUST-001")
+    second_cid = await create_conversation("CUST-001")
+    async with db.SessionLocal() as session:
+        first_message = Message(conversation_id=first_cid, role="user", content="申请退款")
+        second_message = Message(conversation_id=second_cid, role="user", content="申请退款")
+        session.add_all([first_message, second_message])
+        await session.flush()
+        first_source, second_source = first_message.id, second_message.id
+        await session.commit()
+    first = (await confirmation.prepare("CUST-001", first_cid, "ORD-1001", first_source))["proposal"]
+    second = (await confirmation.prepare("CUST-001", second_cid, "ORD-1001", second_source))["proposal"]
+    await confirmation.invalidate_pending("CUST-001", first_cid, first_source)
+    assert (await confirmation.owned_proposal("CUST-001", first["id"]))["status"] == "superseded"
+    assert (await confirmation.owned_proposal("CUST-001", second["id"]))["status"] == "pending"
 
 
 async def test_local_session_has_one_identity_and_three_orders_and_is_dev_only(

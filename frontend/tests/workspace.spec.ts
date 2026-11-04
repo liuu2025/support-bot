@@ -10,7 +10,7 @@ function createState() {
     { id: "DEMO-001-B", product_name: "清仓连帽卫衣", amount: 59, scenario: "final_sale", is_final_sale: true },
     { id: "DEMO-001-C", product_name: "轻薄笔记本电脑", amount: 1299, scenario: "high_value", is_final_sale: false },
   ].map(order => ({ ...order, status: "delivered", order_date: delivered, delivered_date: delivered, refunded: false })) as Order[];
-  return { orders, proposals: [] as RefundProposal[], steps: [] as StepEvent[], messages: [] as { id: number; role: string; content: string; created_at: string }[], tickets: [] as object[], calls: { chat: 0, confirm: 0, cancel: 0, session: 0 }, failConfirmation: false };
+  return { orders, proposals: [] as RefundProposal[], steps: [] as StepEvent[], messages: [] as { id: number; role: string; content: string; created_at: string }[], tickets: [] as object[], calls: { chat: 0, confirm: 0, cancel: 0, session: 0, choice: 0 }, chatOrderIds: [] as (string | null)[], hideLaterOrdersFromList: false, failConfirmation: false };
 }
 
 test.beforeEach(async ({ page }) => {
@@ -22,29 +22,72 @@ test.beforeEach(async ({ page }) => {
     if (path === "/api/meta") return json({ auth_mode: "dev", local_workspace: true, model: "openai-compatible", model_name: saved.model_name, demo: null, refund_policy: { return_window_days: 30, escalation_threshold: 500 } });
     if (path === "/api/local/session") { state.calls.session += 1; return json({ customer: { id: "DEMO-001", name: "林晓" }, orders: state.orders, token: "test-customer", expires_in: 28800 }); }
     if (path === "/api/dev/token") return json({ token: "test-admin", role: "admin" });
-    if (path === "/api/me/orders") return json(state.orders);
+    if (path === "/api/me/orders") return json(state.hideLaterOrdersFromList ? state.orders.slice(0, 1) : state.orders);
     if (path === "/api/me/escalations") return json(state.tickets);
     if (path === "/api/me/refund-proposals") return json(state.proposals);
+    if (path.startsWith("/api/me/order-choice-cards/") && path.endsWith("/decision")) {
+      state.calls.choice += 1;
+      const cardId = decodeURIComponent(path.split("/").at(-2) || "");
+      const body = route.request().postDataJSON();
+      const sourceId = Number(cardId.split(":")[1]);
+      const source = state.messages.find(message => message.id === sourceId);
+      const actionContent = body.action === "selected"
+        ? `我选择订单 ${body.order_id}。关于‘${source?.content || ""}’，请继续帮我处理。`
+        : `继续描述，不选择订单。此前我问的是：‘${source?.content || ""}’。`;
+      const actionMessageId = state.messages.length + 1;
+      state.messages.push({ id: actionMessageId, role: "user", content: actionContent, created_at: new Date().toISOString() });
+      const existing = state.steps.find(step => step.step_type === "card_state" && step.payload.card_id === cardId);
+      const event: StepEvent & { action_message: { kind: "message"; role: "user"; content: string; message_id: number } } = { kind: "step", id: state.steps.length + 1, seq: state.steps.length + 1, step_type: "card_state", message_id: actionMessageId, node: "customer_action", payload: { card_id: cardId, card_type: "order_choice", status: body.action, source_message_id: sourceId, by_message_id: actionMessageId, ...(body.order_id ? { order_id: body.order_id } : {}) }, created_at: new Date().toISOString(), action_message: { kind: "message", role: "user", content: actionContent, message_id: actionMessageId } };
+      if (existing) Object.assign(existing, event); else state.steps.push(event);
+      return json(event);
+    }
     if (path.endsWith("/stream")) return route.fulfill({ contentType: "text/event-stream", body: ": ping\n\n" });
     if (path.startsWith("/api/me/conversations/")) return json({ id: "conv-ui", customer_id: "DEMO-001", customer_name: "林晓", messages: state.messages, events: state.steps });
     if (path === "/api/chat") {
       state.calls.chat += 1;
       const body = route.request().postDataJSON();
-      const order = state.orders.find(o => o.id === body.order_id)!;
-      state.proposals.forEach(p => { if (p.status === "pending") p.status = "superseded"; });
+      state.chatOrderIds.push(body.order_id ?? null);
+      const order = state.orders.find(o => o.id === body.order_id) || state.orders[0];
       state.messages.push({ id: state.messages.length + 1, role: "user", content: body.message, created_at: new Date().toISOString() });
-      const events: object[] = [{ kind: "conversation", conversation_id: "conv-ui" }];
+      const userMessageId = state.messages[state.messages.length - 1].id;
+      const previousUser = [...state.messages.slice(0, -1)].reverse().find(message => message.role === "user");
+      const text = String(body.message);
+      const isAmbiguous = text.includes("哪一笔");
+      const isChoiceReply = text.includes("我指的是订单");
+      const priorRefundIntent = Boolean(isChoiceReply && previousUser?.content.includes("申请退款"));
+      const events: object[] = [
+        { kind: "conversation", conversation_id: "conv-ui" },
+        { kind: "message", role: "user", content: text, message_id: userMessageId },
+      ];
       const addStep = (type: StepEvent["step_type"], payload: Record<string, unknown>) => {
-        const step = { kind: "step" as const, id: state.steps.length + 1, seq: state.steps.length + 1, step_type: type, node: "tools", payload, created_at: new Date().toISOString() };
+        const step = { kind: "step" as const, id: state.steps.length + 1, seq: state.steps.length + 1, step_type: type, message_id: userMessageId, node: "tools", payload, created_at: new Date().toISOString() };
         state.steps.push(step); events.push(step);
       };
-      addStep("tool_call", { tool: "get_order", args: { order_id: order.id } });
-      addStep("policy_eval", { tool: "check_refund_eligibility", result: { decision: order.is_final_sale ? "denied" : order.amount > 500 ? "escalated" : "approved", reasons: [order.is_final_sale ? "特价商品不可退款。" : "符合基础退款条件。"] } });
-      let reply = order.is_final_sale ? "这笔订单属于特价商品，不符合退款条件。" : "这笔订单符合退款条件，咨询不会执行退款。";
-      if (String(body.message).includes("申请") && !order.is_final_sale) {
-        const proposal: RefundProposal = { id: `rp-${state.proposals.length + 1}`, conversation_id: "conv-ui", order_id: order.id, product_name: order.product_name, amount: order.amount, action: order.amount > 500 ? "review" : "refund", status: "pending", reasons: [order.amount > 500 ? "金额超过 500 元，需要人工审核。" : "在退货期内、非特价，符合自动退款条件。"], created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 900000).toISOString(), refund_id: null };
+      for (const cardId of (body.abandon_card_ids || []) as string[]) {
+        if (cardId.startsWith("proposal:")) {
+          const proposal = state.proposals.find(p => p.id === cardId.slice("proposal:".length));
+          if (proposal?.status === "pending") proposal.status = "superseded";
+        }
+        addStep("card_state", { card_id: cardId, card_type: cardId.startsWith("choice:") ? "order_choice" : "refund_proposal", status: "abandoned", by_message_id: userMessageId });
+      }
+      let reply: string;
+      if (isAmbiguous) {
+        const choice = { kind: "step" as const, id: state.steps.length + 1, seq: state.steps.length + 1, step_type: "tool_result" as const, message_id: userMessageId, node: "tools", payload: { tool: "offer_order_choices", result: { orders: state.orders.map(row => ({ order_id: row.id, product_name: row.product_name, amount: row.amount, status: row.status, is_final_sale: row.is_final_sale, already_refunded: row.refunded })) } }, created_at: new Date().toISOString() };
+        state.steps.push(choice); events.push(choice);
+        const pending: StepEvent = { kind: "step", id: state.steps.length + 1, seq: state.steps.length + 1, step_type: "card_state", message_id: userMessageId, node: "customer_action", payload: { card_id: `choice:${userMessageId}`, card_type: "order_choice", status: "pending", source_message_id: userMessageId }, created_at: new Date().toISOString() };
+        state.steps.push(pending); events.push(pending);
+        reply = "请选一个订单，或继续描述你想咨询的内容。";
+      } else {
+        addStep("tool_call", { tool: "get_order", args: { order_id: order.id } });
+        addStep("policy_eval", { tool: "check_refund_eligibility", result: { decision: order.is_final_sale ? "denied" : order.amount > 500 ? "escalated" : "approved", reasons: [order.is_final_sale ? "特价商品不可退款。" : "符合基础退款条件。"] } });
+        reply = order.is_final_sale ? "这笔订单属于特价商品，不符合退款条件。" : "这笔订单符合退款条件，咨询不会执行退款。";
+      }
+      if ((text.includes("申请") || priorRefundIntent) && !isAmbiguous && !order.is_final_sale) {
+        const proposal: RefundProposal = { id: `rp-${state.proposals.length + 1}`, conversation_id: "conv-ui", source_message_id: userMessageId, order_id: order.id, product_name: order.product_name, amount: order.amount, action: order.amount > 500 ? "review" : "refund", status: "pending", reasons: [order.amount > 500 ? "金额超过 500 元，需要人工审核。" : "在退货期内、非特价，符合自动退款条件。"], created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 900000).toISOString(), refund_id: null };
         state.proposals.push(proposal); addStep("proposal", { tool: "prepare_refund", result: { proposal } });
-        events.push({ kind: "refund_proposal", proposal }); reply = "已准备待确认申请，请核对卡片并点击按钮。确认前不会执行。";
+        events.push({ kind: "refund_proposal", proposal });
+        addStep("card_state", { card_id: `proposal:${proposal.id}`, card_type: "refund_proposal", status: "pending", source_message_id: userMessageId });
+        reply = "已准备待确认申请，请核对卡片并点击按钮。确认前不会执行。";
       }
       const message = { id: state.messages.length + 1, role: "assistant", content: reply, created_at: new Date().toISOString() };
       state.messages.push(message); events.push({ kind: "message", role: "assistant", content: reply, message_id: message.id }, { kind: "done" });
@@ -74,12 +117,106 @@ test("one fixed customer and three orders replace role switching", async ({ page
   await page.goto("/chat");
   await expect(page.getByRole("heading", { name: "先查清楚，再由你确认。" })).toBeVisible();
   await expect(page.locator(".workspace-topbar")).toContainText("林晓");
-  await expect(page.locator(".scenario-order")).toHaveCount(3);
+  await expect(page.locator(".scenario-order:visible")).toHaveCount(3);
   await expect(page.getByLabel("以客户身份登录")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /登录管理|退出管理/ })).toHaveCount(0);
   await expect(page.getByRole("navigation", { name: "主导航" }).getByRole("link")).toHaveCount(2);
-  await expect(page.getByLabel("当前退款规则")).toContainText("500 元");
+  await expect(page.locator(".policy-summary:visible")).toContainText("500 元");
   await page.screenshot({ path: "test-results/refund-workspace-desktop.png" });
+});
+
+test("order-information layout toggle persists and remains available on narrow screens", async ({ page }) => {
+  await page.goto("/chat");
+  await expect(page.locator(".refund-workspace")).toHaveClass(/orders-left/);
+  await expect(page.locator(".scenario-order:visible")).toHaveCount(3);
+  await page.getByRole("button", { name: "切换为顶部订单布局" }).click();
+  await expect(page.locator(".refund-workspace")).not.toHaveClass(/orders-left/);
+  await page.getByRole("button", { name: "切换为左侧订单布局" }).click();
+  await expect(page.locator(".refund-workspace")).toHaveClass(/orders-left/);
+  await expect(page.locator(".order-rail > .refund-intro")).toBeVisible();
+  await expect(page.locator(".order-rail > .refund-chat-status")).toBeVisible();
+  await expect(page.locator(".refund-conversation > .refund-intro")).toHaveCount(0);
+  await expect(page.locator(".scenario-order:visible")).toHaveCount(3);
+  await page.setViewportSize({ width: 800, height: 900 });
+  await expect(page.locator(".refund-workspace > .refund-conversation .order-top-mobile")).toBeVisible();
+  await expect(page.locator(".order-top-mobile > .refund-intro")).toBeVisible();
+  await expect(page.locator(".order-top-mobile > .refund-chat-status")).toBeVisible();
+  await expect(page.locator(".scenario-order:visible")).toHaveCount(3);
+  await page.getByRole("button", { name: "切换为顶部订单布局" }).click();
+  await expect(page.locator(".refund-workspace")).not.toHaveClass(/orders-left/);
+  await expect(page.locator(".scenario-order:visible")).toHaveCount(3);
+  await page.getByRole("button", { name: "切换为左侧订单布局" }).click();
+  await page.evaluate(() => {
+    const key = "zhixu.localWorkspace";
+    const session = JSON.parse(sessionStorage.getItem(key) || "null");
+    session.customer.id = "DEMO-002";
+    sessionStorage.setItem(key, JSON.stringify(session));
+  });
+  await page.reload();
+  await expect(page.locator(".refund-workspace")).toHaveClass(/orders-left/);
+  expect(states.get(page)!.calls.chat).toBe(0);
+});
+
+test("an order choice sends a contextual clarification but does not authorize refund", async ({ page }) => {
+  await page.goto("/chat");
+  await page.getByRole("textbox", { name: "消息内容", exact: true }).fill("我想问哪一笔订单");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  const card = page.getByRole("article", { name: "选择要咨询的订单", exact: true });
+  await expect(card).toBeVisible();
+  await card.getByRole("button", { name: /无线降噪耳机/ }).click();
+  await expect(page.getByText(/我指的是订单 DEMO-001-A/)).toBeVisible();
+  expect(states.get(page)!.calls.chat).toBe(2);
+  expect(states.get(page)!.chatOrderIds).toEqual([null, "DEMO-001-A"]);
+  expect(states.get(page)!.calls.confirm).toBe(0);
+  expect(states.get(page)!.orders[0].refunded).toBe(false);
+});
+
+test("choice cards render tool-returned orders even when absent from the current order list", async ({ page }) => {
+  const state = states.get(page)!;
+  state.hideLaterOrdersFromList = true;
+  await page.goto("/chat");
+  await page.getByRole("textbox", { name: "消息内容", exact: true }).fill("我想问哪一笔订单");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  const card = page.getByRole("article", { name: "选择要咨询的订单", exact: true });
+  await expect(card).toBeVisible();
+  await expect(card.getByRole("button", { name: /清仓连帽卫衣/ })).toBeVisible();
+  await card.getByRole("button", { name: /清仓连帽卫衣/ }).click();
+  await expect.poll(() => states.get(page)!.chatOrderIds.at(-1)).toBe("DEMO-001-B");
+  expect(states.get(page)!.calls.confirm).toBe(0);
+});
+
+test("an ambiguous refund request preserves intent but selection still needs card confirmation", async ({ page }) => {
+  await page.goto("/chat");
+  await page.getByRole("textbox", { name: "消息内容", exact: true }).fill("我要申请退款，但不记得是哪一笔订单");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  const card = page.getByRole("article", { name: "选择要咨询的订单", exact: true });
+  await expect(card).toBeVisible();
+  await card.getByRole("button", { name: /无线降噪耳机/ }).click();
+  await expect(page.getByRole("button", { name: "确认退款", exact: true })).toBeVisible();
+  expect(states.get(page)!.calls.confirm).toBe(0);
+  expect(states.get(page)!.orders[0].refunded).toBe(false);
+});
+
+test("a restored choice can continue describing without a stored order context", async ({ page }) => {
+  await page.goto("/chat");
+  const state = states.get(page)!;
+  const choices = state.orders.map(order => ({ order_id: order.id, product_name: order.product_name, amount: order.amount, status: order.status, is_final_sale: order.is_final_sale, already_refunded: order.refunded }));
+  state.messages.push(
+    { id: 10, role: "user", content: "我想问哪一笔订单", created_at: new Date().toISOString() },
+    { id: 11, role: "assistant", content: "请选择订单或继续描述。", created_at: new Date().toISOString() },
+  );
+  state.steps.push({ kind: "step", id: 1, seq: 1, step_type: "tool_result", message_id: 10, node: "tools", payload: { tool: "offer_order_choices", result: { orders: choices } }, created_at: new Date().toISOString() });
+  await page.evaluate(() => {
+    sessionStorage.setItem("zhixu.conversation.DEMO-001", "conv-ui");
+    sessionStorage.setItem("zhixu.selectedOrder.DEMO-001", "DEMO-001-A");
+  });
+  await page.reload();
+  const card = page.getByRole("article", { name: "选择要咨询的订单", exact: true });
+  await expect(card).toBeVisible();
+  await card.getByRole("button", { name: "继续描述，不选择订单", exact: true }).click();
+  await page.getByRole("textbox", { name: "消息内容", exact: true }).fill("我再补充一下情况");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await expect.poll(() => states.get(page)!.chatOrderIds.at(-1)).toBeNull();
 });
 
 test("consultation leaves the order unchanged and does not produce a confirmation", async ({ page }) => {
@@ -200,13 +337,12 @@ test("refresh and opening settings preserve the pending card and conversation", 
   expect(states.get(page)!.calls.chat).toBe(1); expect(states.get(page)!.calls.session).toBe(1);
 });
 
-test("changing orders cancels a pending proposal without another model call", async ({ page }) => {
+test("changing orders preserves an independent pending proposal without another model call", async ({ page }) => {
   await page.goto("/chat"); await page.getByRole("button", { name: "发起退款申请", exact: true }).click();
   await expect(page.getByRole("button", { name: "确认退款", exact: true })).toBeVisible();
   await page.getByRole("button", { name: /特价不可退/ }).click();
-  await expect(page.getByRole("article", { name: "退款确认 DEMO-001-A", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "发起退款申请", exact: true })).toBeVisible();
-  expect(states.get(page)!.calls.cancel).toBe(1); expect(states.get(page)!.calls.chat).toBe(1);
+  await expect(page.getByRole("article", { name: "退款确认 DEMO-001-A", exact: true })).toBeVisible();
+  expect(states.get(page)!.calls.cancel).toBe(0); expect(states.get(page)!.calls.chat).toBe(1);
 });
 
 test("changed server state disables the old confirmation card", async ({ page }) => {
@@ -218,7 +354,7 @@ test("changed server state disables the old confirmation card", async ({ page })
   expect(states.get(page)!.orders[0].refunded).toBe(false);
 });
 
-test("typing confirmation in chat never authorizes execution", async ({ page }) => {
+test("a new message expires untouched cards without authorizing execution", async ({ page }) => {
   await page.goto("/chat"); await page.getByRole("button", { name: "发起退款申请", exact: true }).click();
   await expect(page.getByRole("button", { name: "确认退款", exact: true })).toBeVisible();
   await page.getByRole("textbox", { name: "消息内容", exact: true }).fill("确认");
@@ -226,6 +362,65 @@ test("typing confirmation in chat never authorizes execution", async ({ page }) 
   await expect(page.getByText("已有新的问题或申请，此卡片已失效", { exact: true })).toBeVisible();
   expect(states.get(page)!.calls.confirm).toBe(0);
   expect(states.get(page)!.orders[0].refunded).toBe(false);
+});
+
+test("legacy proposal cards stay beside the user message that created them", async ({ page }) => {
+  const state = states.get(page)!;
+  const firstAt = new Date(Date.now() - 60000).toISOString();
+  const proposalAt = new Date(Date.now() - 50000).toISOString();
+  const laterAt = new Date(Date.now() - 10000).toISOString();
+  state.messages.push(
+    { id: 1, role: "user", content: "旧申请", created_at: firstAt },
+    { id: 2, role: "assistant", content: "我已准备旧申请。", created_at: proposalAt },
+    { id: 3, role: "user", content: "后续咨询", created_at: laterAt },
+    { id: 4, role: "assistant", content: "这是后续答复。", created_at: laterAt },
+  );
+  state.proposals.push({
+    id: "rp-legacy", conversation_id: "conv-ui", source_message_id: null,
+    order_id: "DEMO-001-A", product_name: "无线降噪耳机", amount: 129.99,
+    action: "refund", status: "pending", reasons: ["符合退款条件。"],
+    created_at: proposalAt, expires_at: new Date(Date.now() + 900000).toISOString(), refund_id: null,
+  });
+  await page.goto("/chat");
+  await page.evaluate(() => sessionStorage.setItem("zhixu.conversation.DEMO-001", "conv-ui"));
+  await page.reload();
+  const card = page.getByRole("article", { name: "退款确认 DEMO-001-A", exact: true });
+  await expect(card).toBeVisible();
+  await expect(card.locator("xpath=preceding-sibling::*[1]")).toContainText("旧申请");
+});
+
+test("resolving one card leaves a different card from the same turn pending", async ({ page }) => {
+  const state = states.get(page)!;
+  const userAt = new Date(Date.now() - 20000).toISOString();
+  state.messages.push(
+    { id: 1, role: "user", content: "同时核对两笔订单", created_at: userAt },
+    { id: 2, role: "assistant", content: "请选订单，也可以确认退款方案。", created_at: new Date().toISOString() },
+  );
+  const choices = state.orders.map(order => ({
+    order_id: order.id, product_name: order.product_name, amount: order.amount,
+    status: order.status, is_final_sale: order.is_final_sale, already_refunded: order.refunded,
+  }));
+  state.steps.push(
+    { kind: "step", id: 1, seq: 1, step_type: "tool_result", message_id: 1, node: "tools", payload: { tool: "offer_order_choices", result: { orders: choices } }, created_at: userAt },
+    { kind: "step", id: 2, seq: 2, step_type: "card_state", message_id: 1, node: "customer_action", payload: { card_id: "choice:1", card_type: "order_choice", status: "pending", source_message_id: 1 }, created_at: userAt },
+  );
+  state.proposals.push({
+    id: "rp-same-turn", conversation_id: "conv-ui", source_message_id: 1,
+    order_id: "DEMO-001-A", product_name: "无线降噪耳机", amount: 129.99,
+    action: "refund", status: "pending", reasons: ["符合退款条件。"],
+    created_at: userAt, expires_at: new Date(Date.now() + 900000).toISOString(), refund_id: null,
+  });
+  state.steps.push({ kind: "step", id: 3, seq: 3, step_type: "card_state", message_id: 1, node: "customer_action", payload: { card_id: "proposal:rp-same-turn", card_type: "refund_proposal", status: "pending", source_message_id: 1 }, created_at: userAt });
+  await page.goto("/chat");
+  await page.evaluate(() => sessionStorage.setItem("zhixu.conversation.DEMO-001", "conv-ui"));
+  await page.reload();
+  const choiceCard = page.getByRole("article", { name: "选择要咨询的订单", exact: true });
+  const proposalCard = page.getByRole("article", { name: "退款确认 DEMO-001-A", exact: true });
+  await expect(choiceCard).toBeVisible();
+  await expect(proposalCard.getByRole("button", { name: "确认退款", exact: true })).toBeVisible();
+  await choiceCard.getByRole("button", { name: "继续描述，不选择订单", exact: true }).click();
+  await expect(choiceCard).toHaveAttribute("data-card-status", "skipped");
+  await expect(proposalCard.getByRole("button", { name: "确认退款", exact: true })).toBeVisible();
 });
 
 test("an expired card is restored as non-actionable", async ({ page }) => {
@@ -349,5 +544,5 @@ test("desktop cards respond to the pointer and reduced motion remains usable", a
     .poll(() => card.evaluate((el) => getComputedStyle(el).transform))
     .toBe("none");
   await expect(card).not.toHaveAttribute("data-spotlight-active", "true");
-  await expect(page.getByLabel("当前退款规则")).toContainText("500 元");
+  await expect(page.locator(".policy-summary:visible")).toContainText("500 元");
 });

@@ -62,6 +62,7 @@ from app.schemas import (
     MessageOut,
     ModelConfigUpdate,
     ModelListRequest,
+    OrderChoiceDecision,
     OrderOut,
     PresetCreate,
     PresetRename,
@@ -89,7 +90,7 @@ async def lifespan(_app: FastAPI):
     await db.dispose()
 
 
-app = FastAPI(title="知序客服 API", lifespan=lifespan)
+app = FastAPI(title="退款客服 API", lifespan=lifespan)
 app.include_router(local_router)
 
 # In Docker/k8s the SPA is same-origin (nginx/ingress route /api), so CORS is
@@ -337,7 +338,10 @@ async def chat(req: ChatRequest, principal: Principal = Depends(require_customer
     async def event_stream():
         SSE_STREAMS.labels("chat").inc()
         try:
-            async for event in run_agent_turn(principal.sub, cid, req.message, selected_order_id=req.order_id):
+            async for event in run_agent_turn(
+                principal.sub, cid, req.message, selected_order_id=req.order_id,
+                abandon_card_ids=req.abandon_card_ids,
+            ):
                 yield {"data": json.dumps(event)}
         except Exception as exc:
             # Headers are already sent, so an exception here would tear the
@@ -390,15 +394,15 @@ async def my_conversation(
                 .order_by(Message.id)
             )
         ).all()
-        events = (await session.scalars(select(ReasoningEvent).where(
+        events = list(reversed((await session.scalars(select(ReasoningEvent).where(
             ReasoningEvent.conversation_id == conversation_id,
-        ).order_by(ReasoningEvent.seq).limit(500))).all()
+        ).order_by(ReasoningEvent.seq.desc()).limit(500))).all()))
     return ConversationDetail(
         id=convo.id,
         customer_id=convo.customer_id,
         customer_name=None,
         messages=_messages_out(messages),
-        events=[ReasoningEventOut(id=e.id, seq=e.seq, step_type=e.step_type, node=e.node,
+        events=[ReasoningEventOut(id=e.id, message_id=e.message_id, seq=e.seq, step_type=e.step_type, node=e.node,
                                  payload=e.payload, created_at=e.created_at) for e in events],
     )
 
@@ -426,6 +430,24 @@ class ProposalDecision(BaseModel):
 async def my_refund_proposals(conversation_id: str, principal: Principal = Depends(require_customer)):
     try:
         return await refund_confirmation.list_proposals(principal.sub, conversation_id)
+    except refund_confirmation.ProposalError as exc:
+        raise HTTPException(exc.status, exc.message) from None
+
+
+@app.post("/api/me/order-choice-cards/{card_id}/decision")
+async def decide_order_choice_card(
+    card_id: str, body: OrderChoiceDecision, conversation_id: str, principal: Principal = Depends(require_customer),
+):
+    try:
+        lock = await shared.acquire_turn_lock(conversation_id, 30)
+        if lock is None:
+            raise HTTPException(409, "当前任务正在处理，请稍后再操作。")
+        try:
+            return await refund_confirmation.set_choice_card_state(
+                principal.sub, conversation_id, card_id, body.action, body.order_id,
+            )
+        finally:
+            await shared.release_turn_lock(conversation_id, lock)
     except refund_confirmation.ProposalError as exc:
         raise HTTPException(exc.status, exc.message) from None
 
@@ -594,6 +616,7 @@ async def get_conversation(
         events=[
             ReasoningEventOut(
                 id=e.id,
+                message_id=e.message_id,
                 seq=e.seq,
                 step_type=e.step_type,
                 node=e.node,

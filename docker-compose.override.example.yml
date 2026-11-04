@@ -2,7 +2,8 @@
 # docker compose --env-file private/support-bot.env \
 #   -f docker-compose.yml -f docker-compose.override.example.yml up -d --build
 #
-# All host ports bind to loopback. Do not expose this development stack publicly.
+# Publish only the UI to the local network for trusted-device access.
+# Do not expose this development stack publicly.
 services:
   postgres:
     restart: unless-stopped
@@ -12,9 +13,13 @@ services:
 
   frontend:
     restart: unless-stopped
+    ports: !override
+      - "0.0.0.0:7100:8080"
 
   backend:
     restart: unless-stopped
+    ports: !override
+      - "127.0.0.1:7101:8000"
 
 # Optional when the host Docker address pool is exhausted. Create this network
 # before starting the stack:

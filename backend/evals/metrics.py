@@ -135,7 +135,7 @@ def deterministic_scores(run: Run) -> dict[str, Score]:
 # Tone (LLM-as-judge)
 # ---------------------------------------------------------------------------
 
-TONE_TASK = """You are reviewing replies from "知序客服", an e-commerce customer \
+TONE_TASK = """You are reviewing replies from "退款客服", an e-commerce customer \
 support agent that can only handle refund requests. The refund decision itself is \
 made by a deterministic policy engine and is NOT what you are grading. You are \
 given the conversation and the policy outcome for each order involved."""
