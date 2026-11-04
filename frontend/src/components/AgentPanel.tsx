@@ -1,7 +1,7 @@
 import { Activity } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { OUTCOME_META, outcomeOf } from "../lib/outcome";
-import type { RefundProposal, StepEvent } from "../types";
+import type { ChatMessage, RefundProposal, StepEvent } from "../types";
 import ReasoningTimeline from "./ReasoningTimeline";
 import { Badge, LiveDot } from "./ui";
 
@@ -20,6 +20,7 @@ function Stat({ label, value }: { label: string; value: string | number }) {
 /** Live view of the current (or last) agent turn: stats plus the step timeline. */
 export default function AgentPanel({
   steps,
+  messages,
   streaming,
   startedAt,
   endedAt,
@@ -28,6 +29,7 @@ export default function AgentPanel({
   showTitle = true,
 }: {
   steps: StepEvent[];
+  messages: ChatMessage[];
   streaming: boolean;
   startedAt: number | null;
   endedAt: number | null;
@@ -132,7 +134,7 @@ export default function AgentPanel({
             </p>
           </div>
         ) : (
-          <ReasoningTimeline steps={visibleSteps} />
+          <ReasoningTimeline steps={visibleSteps} messages={messages} />
         )}
         <div ref={endRef} />
       </div>

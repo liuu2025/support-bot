@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ArrowUp, CheckCircle2, Clock3, Columns2, LayoutPanelLeft, Package, RefreshCw, UserRound } from "lucide-react";
+import { ArrowUp, Columns2, LayoutPanelLeft, Package, RefreshCw, UserRound } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, decideOrderChoiceCard, decideRefundProposal, fetchMyConversation, fetchMyEscalations, fetchOrders, fetchRefundProposals, friendlyError, streamChat, subscribeToMyConversation } from "../api";
 import { getToken } from "../auth";
@@ -42,6 +42,16 @@ const SCENARIOS: Record<string, { label: string; detail: string }> = {
   high_value: { label: "大额转人工", detail: "超出自动审批金额" },
 };
 
+function orderStateLabel(order: Order, tickets: Escalation[]): string {
+  if (order.refunded) return "已退款";
+  const ticket = tickets.find(item => item.order_id === order.id);
+  if (ticket?.status === "pending") return "已提交人工审核 · 处理中";
+  if (ticket?.status === "approved") return "人工审核已通过";
+  if (ticket?.status === "denied") return "人工审核未通过";
+  if (order.is_final_sale) return "已签收 · 特价不可退";
+  return order.status === "delivered" ? "已签收 · 未退款" : "尚未签收";
+}
+
 export default function Chat() {
   const { session, restart } = useWorkspaceSession();
   const toast = useToast();
@@ -50,11 +60,9 @@ export default function Chat() {
   const orderKey = `zhixu.selectedOrder.${customerId}`;
   const [orders, setOrders] = useState<Order[]>(session?.orders || []);
   const [selected, setSelected] = useState(() => sessionStorage.getItem(orderKey) || "");
-  const [hasExplicitOrderSelection, setHasExplicitOrderSelection] = useState(() => Boolean(sessionStorage.getItem(orderKey)));
   useEffect(() => {
     const storedOrder = sessionStorage.getItem(orderKey) || "";
     setSelected(storedOrder);
-    setHasExplicitOrderSelection(Boolean(storedOrder));
   }, [orderKey]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const cidRef = useRef<string | null>(null);
@@ -74,13 +82,11 @@ export default function Chat() {
   const [loading, setLoading] = useState(true);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [endedAt, setEndedAt] = useState<number | null>(null);
-  /** Explicitly chosen in the optional card; null means continue without one. */
-  const [choiceOrderOverride, setChoiceOrderOverride] = useState<string | null | undefined>(undefined);
   const optimisticUserId = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const currentOrder = orders.find(order => order.id === selected) || orders[0];
-  const ticket = tickets.find(t => t.order_id === currentOrder?.id);
+  const currentTicket = tickets.find(t => t.order_id === currentOrder?.id);
   const choiceCards = useMemo(() => {
     const cards = new Map<number, ChoiceCardView>();
     const userMessageAt = (createdAt: string) => {
@@ -123,20 +129,33 @@ export default function Chat() {
   }, [choiceCards, messages]);
   const proposalAfterMessage = useMemo(() => {
     const map = new Map<string, RefundProposal[]>();
-    const messageIds = new Set(messages.map(message => message.id));
-    const anchorForMissingSource = (createdAt: string) => {
-      const timestamp = Date.parse(createdAt);
-      if (!Number.isFinite(timestamp)) return undefined;
-      return [...messages].reverse().find(message => message.role === "user" && message.at <= timestamp)?.id;
+    const findSourceIndex = (proposal: RefundProposal) => {
+      const source = proposal.source_message_id == null ? "" : String(proposal.source_message_id);
+      const exact = source ? messages.findIndex(message => message.id === source && message.role === "user") : -1;
+      if (exact >= 0) return exact;
+      const timestamp = Date.parse(proposal.created_at);
+      if (!Number.isFinite(timestamp)) return -1;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (messages[index].role === "user" && messages[index].at <= timestamp) return index;
+      }
+      return -1;
     };
     for (const proposal of proposals) {
-      const source = proposal.source_message_id == null ? "" : String(proposal.source_message_id);
-      const anchor = source && messageIds.has(source) ? source : anchorForMissingSource(proposal.created_at);
+      const sourceIndex = findSourceIndex(proposal);
+      if (sourceIndex < 0) continue;
+      let anchor: string | undefined;
+      for (let index = sourceIndex + 1; index < messages.length && messages[index].role !== "user"; index += 1) {
+        if (messages[index].role === "assistant") {
+          anchor = messages[index].id;
+          break;
+        }
+      }
+      if (!anchor && !streaming) anchor = messages[sourceIndex].id;
       if (!anchor) continue;
       map.set(anchor, [...(map.get(anchor) || []), proposal]);
     }
     return map;
-  }, [proposals, messages]);
+  }, [proposals, messages, streaming]);
   const pendingCardIds = useMemo(() => {
     const cards: { id: string; source: number }[] = [];
     for (const proposal of proposals) {
@@ -262,13 +281,7 @@ export default function Chat() {
     text = text.trim();
     if (!text || text.length > 2000 || streamingRef.current || (!bypassBusy && busy) || !getToken("customer")) return;
     setTurnMessageId(null);
-    const explicitOverride = orderIdOverride !== undefined ? orderIdOverride : choiceOrderOverride;
-    // Only send implicit order context after a customer explicitly selected an
-    // order in the order strip; the initial fallback card isn't a user choice.
-    const orderId = explicitOverride !== undefined
-      ? explicitOverride || undefined
-      : hasExplicitOrderSelection ? currentOrder?.id : undefined;
-    setChoiceOrderOverride(undefined);
+    const orderId = orderIdOverride || undefined;
     streamingRef.current = true; setStreaming(true); setStartedAt(Date.now()); setEndedAt(null);
     optimisticUserId.current = `local-${crypto.randomUUID()}`;
     setMessages(previous => [...previous, { id: optimisticUserId.current!, role: "user", content: text, at: Date.now() }]);
@@ -323,7 +336,6 @@ export default function Chat() {
       const state = await decideOrderChoiceCard(conversationId, card.cardId, "selected", order.order_id);
       appendStep(state);
       if (state.action_message) appendUserMessage(state.action_message);
-      setChoiceOrderOverride(order.order_id);
       setBusy(null);
       await send(`我指的是订单 ${order.order_id}（${order.product_name}）。请结合我刚才的问题继续帮我处理。`, order.order_id, [], true);
     } catch (err) { toast(friendlyError(err), "error"); }
@@ -337,17 +349,13 @@ export default function Chat() {
       const state = await decideOrderChoiceCard(conversationId, card.cardId, "skipped");
       appendStep(state);
       if (state.action_message) appendUserMessage(state.action_message);
-      setChoiceOrderOverride(null);
     } catch (err) { toast(friendlyError(err), "error"); }
     finally { setBusy(null); composerRef.current?.focus(); }
   }
 
   function selectOrder(order: Order) {
     if (streamingRef.current || busy || order.id === selected) return;
-    // Order selection only changes the context for future turns. Existing
-    // proposal cards remain visible at their original turn and stay actionable.
-    setSelected(order.id); setHasExplicitOrderSelection(true); sessionStorage.setItem(orderKey, order.id);
-    setChoiceOrderOverride(order.id);
+    setSelected(order.id); sessionStorage.setItem(orderKey, order.id);
   }
 
   function toggleOrderLayout() {
@@ -367,11 +375,15 @@ export default function Chat() {
           aria-pressed={currentOrder?.id === order.id} onClick={() => void selectOrder(order)}>
           <span className="flex items-center justify-between gap-2"><strong>{scenario?.label || `订单 ${index + 1}`}</strong><span className="text-brand">{money(order.amount)}</span></span>
           <span className="mt-1 block text-xs text-muted">{order.product_name}</span>
-          <small>{order.refunded ? "已退款" : scenario?.detail || "查看订单与退款条件"}</small>
+          <small>{scenario?.detail || "查看订单与退款条件"}</small>
+          <small className="scenario-order-state">{orderStateLabel(order, tickets)}</small>
         </button>;
       })}
     </div>
-    {currentOrder && <div className="selected-order-info"><Package size={14} /><span>当前订单 <b className="font-mono">{currentOrder.id}</b></span><span>{currentOrder.refunded ? "已退款" : currentOrder.status === "delivered" ? "已签收" : "尚未签收"}</span></div>}
+    {currentOrder && <div className="selected-order-info">
+      <Package size={14} /><span>当前订单 <b className="font-mono">{currentOrder.id}</b></span><span>{orderStateLabel(currentOrder, tickets)}</span>
+      {currentTicket && <button type="button" aria-label="刷新审核状态" title="刷新审核状态" onClick={() => void loadOrders().catch(err => toast(friendlyError(err), "error"))}><RefreshCw size={13} /></button>}
+    </div>}
     <PolicySummary />
   </div>;
   const intro = () => <div className={clsx("refund-intro", orderLayout === "left" && "rail-intro")}>
@@ -394,13 +406,13 @@ export default function Chat() {
         {!loading && messages.length === 0 && <div className="refund-empty">
           <Logo size={36} /><h2>先问问，或直接提出申请。</h2><p>咨询只会查询；退款申请也会停在确认步骤，等待你点击按钮。</p>
           <div className="mt-5 flex justify-center gap-3">
-            <Button disabled={!currentOrder || streaming} onClick={() => void send(`订单 ${currentOrder.id} 能退款吗？我先咨询一下条件。`, currentOrder.id)}>先咨询能否退款</Button>
-            <Button variant="primary" disabled={!currentOrder || streaming} onClick={() => void send(`我要为订单 ${currentOrder.id} 申请退款，请核对订单并准备待确认申请。`, currentOrder.id)}>发起退款申请</Button>
+            <Button disabled={!currentOrder || streaming} onClick={() => void send("请查看我名下的订单，并核对哪些符合退款条件。")}>先咨询能否退款</Button>
+            <Button variant="primary" disabled={!currentOrder || streaming} onClick={() => void send("我要申请退款，请先查看我名下的订单，并让我选择具体订单。")}>发起退款申请</Button>
           </div>
         </div>}
         {messages.map(message => {
           const choices = message.role === "user" ? (cardsAfterMessage.get(message.id) || []) : [];
-          const anchoredProposals = message.role === "user" ? (proposalAfterMessage.get(message.id) || []) : [];
+          const anchoredProposals = message.role === "assistant" || !streaming ? (proposalAfterMessage.get(message.id) || []) : [];
           return <Fragment key={message.id}>
             <div className={`refund-message ${message.role}`}>
               <span className="shrink-0">{message.role === "user" ? <UserRound size={22} /> : <Logo size={26} />}</span>
@@ -410,32 +422,22 @@ export default function Chat() {
               <OrderChoiceCard key={card.cardId} orders={card.orders} status={card.status} selectedOrderId={card.selectedOrderId}
                 disabled={Boolean(busy) || streaming} onChoose={order => void chooseOrder(order, card)} onContinue={() => void continueDescribing(card)} />
             ))}
-            {message.role === "user" && anchoredProposals.map(proposal => (
+            {anchoredProposals.map(proposal => (
               <RefundConfirmation key={proposal.id} proposal={proposal} disabled={streaming} busy={busy} onDecision={(p, decision) => void decide(p, decision)} />
             ))}
           </Fragment>;
         })}
         {streaming && <div className="flex items-center gap-2 text-sm text-muted"><Spinner />正在查询订单与核验退款条件…</div>}
-        {ticket && <article className="review-progress" aria-label="人工审核进度">
-          <strong className="flex items-center gap-2 text-sm">{ticket.status === "pending" ? <Clock3 size={16} /> : <CheckCircle2 size={16} />}人工审核{ticket.status === "pending" ? "进行中" : ticket.status === "approved" ? "已批准" : "已拒绝"}</strong>
-          <p className="mt-2 text-xs text-muted">订单 {ticket.order_id} · {money(ticket.amount)} · 工单 #{ticket.id}</p>
-          <p className="mt-2 text-xs leading-6 text-muted">{ticket.status === "pending" ? "申请已提交，尚未退款。人工处理后，结果会在这里更新。" : ticket.resolution_note || "人工处理结果已记录。"}</p>
-          <Button size="sm" className="mt-3" onClick={() => void loadOrders().catch(err => toast(friendlyError(err), "error"))}>刷新处理进度</Button>
-        </article>}
       </div>
       <form className="refund-composer" onSubmit={event => { event.preventDefault(); void submitText(input); }}>
         <div><label htmlFor="composer" className="sr-only">消息内容</label><textarea ref={composerRef} id="composer" rows={2} value={input} maxLength={2000}
-          disabled={!getToken("customer") || loading} onChange={event => {
-            const value = event.target.value;
-            setInput(value);
-            if (typeof choiceOrderOverride === "string" && !value.includes(choiceOrderOverride)) setChoiceOrderOverride(undefined);
-          }}
+          disabled={!getToken("customer") || loading} onChange={event => setInput(event.target.value)}
           onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submitText(input); } }}
           placeholder="例如：这笔订单能退吗？或：我想申请退款，商品不太合适。" />
           <button type="submit" aria-label="发送消息" disabled={streaming || Boolean(busy) || loading || !input.trim()}><ArrowUp size={20} /></button></div>
         <p>回车发送 · Shift + 回车换行 <span>咨询不会退款，确认按钮才授权执行</span></p>
       </form>
     </section>
-    <aside className="refund-trace"><AgentPanel steps={steps} proposals={proposals} streaming={streaming} startedAt={startedAt} endedAt={endedAt} turnMessageId={turnMessageId} /></aside>
+    <aside className="refund-trace"><AgentPanel steps={steps} messages={messages} proposals={proposals} streaming={streaming} startedAt={startedAt} endedAt={endedAt} turnMessageId={turnMessageId} /></aside>
   </div>;
 }

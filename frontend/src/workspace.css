@@ -210,6 +210,12 @@
   color:rgb(var(--c-subtle));
 }
 
+.scenario-order .scenario-order-state {
+  margin-top:5px;
+  color:rgb(var(--c-muted));
+  font-weight:550;
+}
+
 .scenario-order.is-selected {
   border-color:rgb(var(--c-brand));
   box-shadow:0 0 0 1px rgb(var(--c-brand) / .12);
@@ -229,6 +235,20 @@
 .selected-order-info b {
   font-weight:500;
   color:rgb(var(--c-fg));
+}
+
+.selected-order-info > button {
+  display:inline-grid;
+  width:24px;
+  height:24px;
+  place-items:center;
+  border-radius:4px;
+  color:rgb(var(--c-muted));
+}
+.selected-order-info > button:hover,
+.selected-order-info > button:focus-visible {
+  color:rgb(var(--c-brand));
+  background:rgb(var(--c-brand) / .08);
 }
 
 .refund-chat-status {
@@ -305,7 +325,7 @@
   flex-direction:row-reverse;
 }
 
-.refund-message, .refund-confirmation, .review-progress {
+.refund-message, .refund-confirmation {
   flex-shrink:0;
 }
 
@@ -448,14 +468,6 @@
 
 .confirmation-fields dd.text-lg {
   font-size:20px;
-}
-
-.review-progress {
-  border:1px solid rgb(var(--c-brand) / .2);
-  background:rgb(var(--c-brand) / .04);
-  border-radius:12px;
-  padding:18px;
-  margin-left:36px;
 }
 
 /* Order placement can switch between the compact top strip and a desktop rail. */

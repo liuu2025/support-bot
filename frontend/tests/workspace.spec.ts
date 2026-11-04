@@ -164,7 +164,7 @@ test("an order choice sends a contextual clarification but does not authorize re
   const card = page.getByRole("article", { name: "选择要咨询的订单", exact: true });
   await expect(card).toBeVisible();
   await card.getByRole("button", { name: /无线降噪耳机/ }).click();
-  await expect(page.getByText(/我指的是订单 DEMO-001-A/)).toBeVisible();
+  await expect(page.getByLabel("客服对话").getByText(/我指的是订单 DEMO-001-A/)).toBeVisible();
   expect(states.get(page)!.calls.chat).toBe(2);
   expect(states.get(page)!.chatOrderIds).toEqual([null, "DEMO-001-A"]);
   expect(states.get(page)!.calls.confirm).toBe(0);
@@ -229,6 +229,15 @@ test("consultation leaves the order unchanged and does not produce a confirmatio
   await expect(page.locator(".refund-trace")).toContainText("符合退款条件");
 });
 
+test("selecting an order in the information panel does not affect chat context", async ({ page }) => {
+  await page.goto("/chat");
+  await page.getByRole("button", { name: /大额转人工/ }).click();
+  await page.getByRole("textbox", { name: "消息内容", exact: true }).fill("请帮我解释一下退款规则");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  await expect.poll(() => states.get(page)!.chatOrderIds.at(-1)).toBeNull();
+  expect(states.get(page)!.calls.chat).toBe(1);
+});
+
 test("event view defaults to skipped original numbers and can show every recorded event", async ({ page }) => {
   await page.goto("/chat");
   await page.getByRole("button", { name: "先咨询能否退款", exact: true }).click();
@@ -279,11 +288,53 @@ test("event view defaults to skipped original numbers and can show every recorde
   expect(state.calls.confirm).toBe(0);
 });
 
+test("execution history inserts each matched user question without renumbering steps", async ({ page }) => {
+  const state = states.get(page)!;
+  const firstAt = new Date(Date.now() - 60000).toISOString();
+  const secondAt = new Date(Date.now() - 30000).toISOString();
+  state.messages.push(
+    { id: 10, role: "user", content: "第一条：订单 A 能退款吗？", created_at: firstAt },
+    { id: 11, role: "assistant", content: "订单 A 符合条件。", created_at: firstAt },
+    { id: 12, role: "user", content: "第二条：订单 B 呢？", created_at: secondAt },
+    { id: 13, role: "assistant", content: "订单 B 是特价商品。", created_at: secondAt },
+  );
+  const event = (id: number, seq: number, step_type: StepEvent["step_type"], message_id: number) => ({
+    kind: "step" as const, id, seq, step_type, message_id, node: "test", payload: {}, created_at: new Date().toISOString(),
+  });
+  state.steps = [
+    event(1, 2, "tool_call", 10),
+    event(2, 3, "policy_eval", 10),
+    event(3, 8, "tool_call", 12),
+    event(4, 9, "policy_eval", 12),
+    event(5, 12, "confirmation", 11),
+    event(6, 13, "tool_result", 999),
+  ];
+  await page.goto("/chat");
+  await page.evaluate(() => sessionStorage.setItem("zhixu.conversation.DEMO-001", "conv-ui"));
+  await page.reload();
+
+  const trace = page.locator(".refund-trace");
+  const timeline = trace.locator("ol");
+  await expect(timeline.locator(".trace-question")).toHaveCount(2);
+  await expect(timeline.locator(".trace-step")).toHaveCount(6);
+  await expect(timeline.locator(".trace-question").nth(0)).toContainText("第一条：订单 A 能退款吗？");
+  await expect(timeline.locator(".trace-question").nth(1)).toContainText("第二条：订单 B 呢？");
+  await expect(trace.getByText(/^#\d+$/)).toHaveText(["#2", "#3", "#8", "#9", "#12", "#13"]);
+  const rows = await timeline.locator(":scope > li").evaluateAll(elements => elements.map(element => element.textContent || ""));
+  expect(rows[0]).toContain("第一条：订单 A 能退款吗？");
+  expect(rows[1]).toContain("#2");
+  expect(rows[3]).toContain("第二条：订单 B 呢？");
+  expect(rows[4]).toContain("#8");
+  expect(rows[5]).not.toContain("用户问题");
+  expect(rows[6]).not.toContain("用户问题");
+});
+
 test("a refund needs a button click and confirmation never calls the model again", async ({ page }) => {
   await page.goto("/chat");
   await page.getByRole("button", { name: "发起退款申请", exact: true }).click();
   const card = page.getByRole("article", { name: "退款确认 DEMO-001-A", exact: true });
   await expect(card).toContainText("129.99 元"); await expect(card).toContainText("无线降噪耳机");
+  await expect(card.locator("xpath=preceding-sibling::*[1]")).toContainText("已准备待确认申请");
   expect(states.get(page)!.orders[0].refunded).toBe(false);
   await expect(page.locator(".refund-trace")).toContainText("等待客户确认");
   await page.screenshot({ path: "test-results/refund-awaiting-confirmation-desktop.png" });
@@ -293,6 +344,7 @@ test("a refund needs a button click and confirmation never calls the model again
   await card.getByRole("button", { name: "确认退款", exact: true }).click();
   await expect(page.getByText("退款已记录，订单状态已更新。", { exact: true })).toBeVisible();
   expect(states.get(page)!.orders[0].refunded).toBe(true);
+  await expect(page.getByRole("button", { name: /正常退款/ })).toContainText("已退款");
   expect(states.get(page)!.calls.chat).toBe(calls);
   expect(states.get(page)!.calls.confirm).toBe(1);
   await expect(page.locator(".refund-trace")).toContainText("退款已记录");
@@ -308,21 +360,34 @@ test("cancel is a fixed action and never writes a refund", async ({ page }) => {
 });
 
 test("denied orders do not offer a refund button", async ({ page }) => {
-  await page.goto("/chat"); await page.getByRole("button", { name: /特价不可退/ }).click();
-  await page.getByRole("button", { name: "发起退款申请", exact: true }).click();
+  await page.goto("/chat");
+  await page.getByRole("textbox", { name: "消息内容", exact: true }).fill("我要申请退款，但不记得是哪一笔订单");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  const choices = page.getByRole("article", { name: "选择要咨询的订单", exact: true });
+  await choices.getByRole("button", { name: /清仓连帽卫衣/ }).click();
   await expect(page.getByText("这笔订单属于特价商品，不符合退款条件。", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "确认退款", exact: true })).toHaveCount(0);
 });
 
 test("a large refund confirms submission for human review on the same page", async ({ page }) => {
-  await page.goto("/chat"); await page.getByRole("button", { name: /大额转人工/ }).click();
-  await page.getByRole("button", { name: "发起退款申请", exact: true }).click();
+  await page.goto("/chat");
+  await page.getByRole("textbox", { name: "消息内容", exact: true }).fill("我要申请退款，但不记得是哪一笔订单");
+  await page.getByRole("button", { name: "发送消息", exact: true }).click();
+  const choices = page.getByRole("article", { name: "选择要咨询的订单", exact: true });
+  await choices.getByRole("button", { name: /轻薄笔记本电脑/ }).click();
   await expect(page.locator(".refund-trace")).toContainText("等待客户确认");
   await expect(page.locator(".refund-trace")).not.toContainText("人工工单已提交");
   await page.getByRole("button", { name: "确认提交人工审核", exact: true }).click();
-  await expect(page.getByRole("article", { name: "人工审核进度" })).toContainText("尚未退款");
-  expect(states.get(page)!.orders[2].refunded).toBe(false); expect(states.get(page)!.calls.chat).toBe(1);
+  await expect(page.getByRole("article", { name: "退款确认 DEMO-001-C", exact: true })).toContainText("当前尚未退款");
+  expect(states.get(page)!.orders[2].refunded).toBe(false); expect(states.get(page)!.calls.chat).toBe(2);
   await expect(page.locator(".refund-trace")).toContainText("人工工单已提交");
+  await expect(page.getByRole("button", { name: /大额转人工/ })).toContainText("已提交人工审核 · 处理中");
+  await expect(page.locator(".review-progress")).toHaveCount(0);
+  await page.getByRole("button", { name: /大额转人工/ }).click();
+  await expect(page.getByRole("button", { name: /大额转人工/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "刷新审核状态", exact: true })).toBeVisible();
+  await expect(page.locator(".review-progress")).toHaveCount(0);
+  expect(states.get(page)!.calls.chat).toBe(2);
   await expect(page).toHaveURL(/\/chat$/);
 });
 
@@ -364,7 +429,7 @@ test("a new message expires untouched cards without authorizing execution", asyn
   expect(states.get(page)!.orders[0].refunded).toBe(false);
 });
 
-test("legacy proposal cards stay beside the user message that created them", async ({ page }) => {
+test("legacy proposal cards appear after the assistant reply for their turn", async ({ page }) => {
   const state = states.get(page)!;
   const firstAt = new Date(Date.now() - 60000).toISOString();
   const proposalAt = new Date(Date.now() - 50000).toISOString();
@@ -386,7 +451,8 @@ test("legacy proposal cards stay beside the user message that created them", asy
   await page.reload();
   const card = page.getByRole("article", { name: "退款确认 DEMO-001-A", exact: true });
   await expect(card).toBeVisible();
-  await expect(card.locator("xpath=preceding-sibling::*[1]")).toContainText("旧申请");
+  await expect(card.locator("xpath=preceding-sibling::*[1]")).toContainText("我已准备旧申请。");
+  await expect(card.locator("xpath=preceding-sibling::*[2]")).toContainText("旧申请");
 });
 
 test("resolving one card leaves a different card from the same turn pending", async ({ page }) => {

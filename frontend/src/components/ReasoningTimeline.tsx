@@ -1,4 +1,5 @@
 import clsx from "clsx";
+import { Fragment } from "react";
 import {
   AlertTriangle,
   Brain,
@@ -6,12 +7,13 @@ import {
   ExternalLink,
   Gauge,
   Info,
+  MessageCircle,
   ShieldAlert,
   ShieldCheck,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
-import type { Outcome, StepEvent } from "../types";
+import type { ChatMessage, Outcome, StepEvent } from "../types";
 import { DECISION_LABEL, OUTCOME_META, money, type Tone } from "../lib/outcome";
 import Markdown from "./Markdown";
 import { Badge } from "./ui";
@@ -182,8 +184,10 @@ function StepBody({ step }: { step: StepEvent }) {
 
 export default function ReasoningTimeline({
   steps,
+  messages,
 }: {
   steps: StepEvent[];
+  messages: ChatMessage[];
 }) {
   if (steps.length === 0) {
     return (
@@ -192,38 +196,52 @@ export default function ReasoningTimeline({
       </p>
     );
   }
+  const userMessages = new Map(messages.filter(message => message.role === "user").map(message => [message.id, message]));
+  const shownQuestions = new Set<string>();
+
   return (
     <ol className="relative space-y-3 before:absolute before:bottom-2 before:left-[13px] before:top-2 before:w-px before:bg-line">
       {steps.map((step) => {
         const meta = STEP_META[step.step_type] || STEP_META.tool_result;
         const Icon = meta.icon;
+        const question = step.message_id == null ? undefined : userMessages.get(String(step.message_id));
+        const showQuestion = Boolean(question && !shownQuestions.has(question.id));
+        if (showQuestion && question) shownQuestions.add(question.id);
         return (
-          <li
-            key={`${step.id}-${step.seq}`}
-            className="relative flex animate-fade-up gap-3"
-          >
-            <span
-              className={clsx(
-                "relative z-10 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ring-4 ring-surface",
-                DOT[meta.tone],
-              )}
-            >
-              <Icon size={14} />
-            </span>
-            <div className="min-w-0 flex-1 pb-1">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] font-semibold uppercase tracking-wide text-subtle">
-                  {meta.label}
-                </span>
-                <span className="font-mono text-[10px] text-subtle">
-                  #{step.seq}
-                </span>
+          <Fragment key={`${step.id}-${step.seq}`}>
+            {showQuestion && question && <li className="trace-question relative flex animate-fade-up gap-3" aria-label={`用户问题：${question.content}`}>
+              <span className="relative z-10 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand/10 text-brand ring-4 ring-surface">
+                <MessageCircle size={14} />
+              </span>
+              <div className="min-w-0 flex-1 rounded-md border border-brand/15 bg-brand/5 px-3 py-2.5">
+                <span className="text-[10px] font-semibold text-brand">用户问题</span>
+                <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-fg">{question.content}</p>
               </div>
-              <div className="mt-0.5">
-                <StepBody step={step} />
+            </li>}
+            <li className="trace-step relative flex animate-fade-up gap-3">
+              <span
+                className={clsx(
+                  "relative z-10 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ring-4 ring-surface",
+                  DOT[meta.tone],
+                )}
+              >
+                <Icon size={14} />
+              </span>
+              <div className="min-w-0 flex-1 pb-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-subtle">
+                    {meta.label}
+                  </span>
+                  <span className="font-mono text-[10px] text-subtle">
+                    #{step.seq}
+                  </span>
+                </div>
+                <div className="mt-0.5">
+                  <StepBody step={step} />
+                </div>
               </div>
-            </div>
-          </li>
+            </li>
+          </Fragment>
         );
       })}
     </ol>
